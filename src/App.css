@@ -794,3 +794,14 @@ input:focus, select:focus {
     margin-left: auto;
   }
 }
+
+\n/* SplitLedger productivity features */
+.custom-share-box { display:grid; gap:12px; padding:16px; border:1px solid #e5e0ff; border-radius:12px; background:#faf9ff; }
+.receipt-preview { display:block; max-width:220px; max-height:180px; object-fit:contain; margin-top:10px; border:1px solid #e5e1f2; border-radius:10px; }
+.receipt-thumb { width:44px; height:44px; object-fit:cover; border-radius:8px; border:1px solid #e5e1f2; }
+.budget-summary { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin:16px 0; }
+.budget-summary div { padding:13px; background:#f7f6ff; border-radius:10px; }
+.budget-summary small,.budget-summary strong { display:block; }
+.budget-summary small { color:#77758f; font-size:11px; }
+.budget-summary strong { margin-top:6px; color:#302568; font-size:18px; }
+.budget-warning { padding:10px 12px; border-radius:9px; background:#fff4e7; color:#9a5a12; font-size:12px; }

@@ -34,6 +34,10 @@ const makeId = () =>
 
 const userKey = (type, phone) => `splitledger_${type}_${phone}`;
 
+const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({
+  "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+}[char]));
+
 const csvCell = (value) => `"${String(value ?? "").replace(/"/g, '""')}"`;
 
 function App() {
@@ -52,6 +56,10 @@ function App() {
   const [expenses, setExpenses] = useState([]);
   const [settlements, setSettlements] = useState([]);
   const [reminders, setReminders] = useState([]);
+  const [paymentDues, setPaymentDues] = useState([]);
+  const [monthlyBudget, setMonthlyBudget] = useState(() => 0);
+  const [customShares, setCustomShares] = useState({});
+  const [receiptData, setReceiptData] = useState("");
   const [dataOwnerPhone, setDataOwnerPhone] = useState("");
 
   const [groupName, setGroupName] = useState("");
@@ -79,6 +87,10 @@ function App() {
   const [settleNote, setSettleNote] = useState("");
   const [reminderText, setReminderText] = useState("");
   const [profileName, setProfileName] = useState("");
+  const [duePerson, setDuePerson] = useState("");
+  const [dueAmount, setDueAmount] = useState("");
+  const [dueDate, setDueDate] = useState("");
+  const [dueNote, setDueNote] = useState("");
 
   useEffect(() => writeJSON(USER_KEY, users), [users]);
 
@@ -103,6 +115,8 @@ function App() {
     setExpenses(readJSON(userKey("expenses", phone), []));
     setSettlements(readJSON(userKey("settlements", phone), []));
     setReminders(readJSON(userKey("reminders", phone), []));
+    setPaymentDues(readJSON(userKey("paymentDues", phone), []));
+    setMonthlyBudget(Number(readJSON(userKey("monthlyBudget", phone), 0)) || 0);
     setProfileName(session?.name || "");
     setDataOwnerPhone(phone);
   }, [phone]);
@@ -130,6 +144,13 @@ function App() {
       writeJSON(userKey("reminders", phone), reminders);
     }
   }, [reminders, phone, dataOwnerPhone]);
+  useEffect(() => {
+    if (phone && dataOwnerPhone === phone) writeJSON(userKey("paymentDues", phone), paymentDues);
+  }, [paymentDues, phone, dataOwnerPhone]);
+
+  useEffect(() => {
+    if (phone && dataOwnerPhone === phone) writeJSON(userKey("monthlyBudget", phone), monthlyBudget);
+  }, [monthlyBudget, phone, dataOwnerPhone]);
 
   useEffect(() => {
     if (!toast) return;
@@ -154,6 +175,12 @@ function App() {
     });
     return [...all].filter(Boolean);
   }, [groups, expenses, settlements, session]);
+
+  const currentMonthKey = new Date().toISOString().slice(0, 7);
+  const monthlySpent = expenses
+    .filter((item) => String(item.date || "").slice(0, 7) === currentMonthKey)
+    .reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
+  const budgetRemaining = Math.max(0, Number(monthlyBudget || 0) - monthlySpent);
 
   const totalSpent = expenses.reduce(
     (sum, expense) => sum + (Number(expense.amount) || 0),
@@ -396,14 +423,24 @@ function App() {
       const totalPaise = Math.round(amount * 100);
       const eachPaise = Math.floor(totalPaise / members.length);
       let remainingPaise = totalPaise - eachPaise * members.length;
-
       shares = members.map((person) => {
         const sharePaise = eachPaise + (remainingPaise > 0 ? 1 : 0);
         remainingPaise -= remainingPaise > 0 ? 1 : 0;
         return { person, amount: sharePaise / 100 };
       });
+    } else if (expenseSplit === "custom") {
+      shares = members.map((person) => ({ person, amount: Number(customShares[person]) || 0 }));
+      const allocated = Math.round(shares.reduce((sum, item) => sum + item.amount, 0) * 100);
+      if (allocated !== Math.round(amount * 100)) {
+        notify("Custom shares must add up exactly to the total expense.");
+        return;
+      }
+      if (shares.some((item) => item.amount < 0)) {
+        notify("Share amounts cannot be negative.");
+        return;
+      }
     } else {
-      shares = [{ person: payer, amount }];
+      shares = members.map((person) => ({ person, amount: person === payer ? amount : 0 }));
     }
 
     setExpenses((previous) => [
@@ -428,6 +465,90 @@ function App() {
     setExpenseSplit("equal");
     notify("Expense added successfully.");
     setPage("Expenses");
+  }
+
+  function handleReceiptUpload(event) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      notify("Please upload an image receipt (JPG, PNG or WEBP).");
+      event.target.value = "";
+      return;
+    }
+    if (file.size > 4 * 1024 * 1024) {
+      notify("Please choose an image smaller than 4 MB.");
+      event.target.value = "";
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const image = new Image();
+      image.onload = () => {
+        const scale = Math.min(1, 1100 / Math.max(image.width, image.height));
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(image.width * scale));
+        canvas.height = Math.max(1, Math.round(image.height * scale));
+        canvas.getContext("2d").drawImage(image, 0, 0, canvas.width, canvas.height);
+        const compressed = canvas.toDataURL("image/jpeg", 0.68);
+        if (compressed.length > 950000) {
+          notify("Receipt image is still too large after compression. Choose a smaller image.");
+          return;
+        }
+        setReceiptData(compressed);
+        notify("Receipt attached and compressed.");
+      };
+      image.onerror = () => notify("Unable to process this receipt image.");
+      image.src = String(reader.result || "");
+    };
+    reader.onerror = () => notify("Unable to read this receipt.");
+    reader.readAsDataURL(file);
+  }
+
+  function exportPdfReport() {
+    const rows = expenses.map((item) => `
+      <tr><td>${new Date(item.date).toLocaleDateString("en-IN")}</td>
+      <td>${escapeHtml(item.title)}</td><td>${escapeHtml(item.category)}</td>
+      <td>${escapeHtml(item.groupName || "Personal")}</td><td>${escapeHtml(item.paidBy)}</td>
+      <td>${money(item.amount)}</td></tr>`).join("");
+    const settlementRows = settlements.map((item) => `
+      <tr><td>${item.paymentDate || new Date(item.date).toLocaleDateString("en-IN")}</td>
+      <td>${escapeHtml(item.from)} → ${escapeHtml(item.to)}</td><td>${money(item.amount)}</td>
+      <td>${escapeHtml(item.paymentMode || "—")}</td></tr>`).join("");
+    const report = window.open("", "_blank");
+    if (!report) {
+      notify("Allow pop-ups to generate the PDF report.");
+      return;
+    }
+    report.document.write(`<!doctype html><html><head><title>SplitLedger Expense Report</title>
+      <style>body{font:14px Arial,sans-serif;padding:32px;color:#222}h1{color:#35276f}
+      table{border-collapse:collapse;width:100%;margin:14px 0 28px}th,td{border:1px solid #ddd;padding:9px;text-align:left}
+      th{background:#f1efff}.summary{display:flex;gap:24px;margin:20px 0}.summary div{padding:14px;background:#f6f5ff}
+      @media print{button{display:none}}</style></head><body>
+      <h1>SplitLedger — Expense Report</h1><p>Account: ${escapeHtml(session.name)} · Generated: ${new Date().toLocaleString("en-IN")}</p>
+      <div class="summary"><div><b>Total expenses</b><br>${money(totalSpent)}</div>
+      <div><b>Transactions</b><br>${expenses.length}</div><div><b>Settlements</b><br>${settlements.length}</div></div>
+      <h2>Expense details</h2><table><thead><tr><th>Date</th><th>Description</th><th>Category</th><th>Group</th><th>Paid by</th><th>Amount</th></tr></thead><tbody>${rows || "<tr><td colspan='6'>No expenses</td></tr>"}</tbody></table>
+      <h2>Settlement history</h2><table><thead><tr><th>Date</th><th>Payment</th><th>Amount</th><th>Mode</th></tr></thead><tbody>${settlementRows || "<tr><td colspan='4'>No settlements</td></tr>"}</tbody></table>
+      <script>window.onload=()=>window.print()<\/script></body></html>`);
+    report.document.close();
+  }
+
+  function addPaymentDue(event) {
+    event.preventDefault();
+    const person = duePerson;
+    if (!person || !dueDate || !(Number(dueAmount) > 0)) {
+      notify("Select a person, amount and due date.");
+      return;
+    }
+    setPaymentDues((previous) => [{
+      id: makeId(), person, amount: Number(dueAmount), dueDate,
+      note: dueNote.trim(), done: false, createdAt: new Date().toISOString()
+    }, ...previous]);
+    setDuePerson("");
+    setDueAmount("");
+    setDueDate("");
+    setDueNote("");
+    notify("Payment due date saved.");
   }
 
   function startEditExpense(expense) {
@@ -784,6 +905,7 @@ function App() {
     ["Settle Up", "✓"],
     ["Settlement History", "◷"],
     ["Reminders", "♧"],
+    ["Payment Due Dates", "◷"],
     ["Analytics", "▥"],
     ["Profile", "◎"],
   ];
@@ -1063,7 +1185,27 @@ function App() {
                     <select value={expenseSplit} onChange={(event) => setExpenseSplit(event.target.value)}>
                       <option value="equal">Split equally among group members</option>
                       <option value="payer">Payer bears the full expense</option>
+                      <option value="custom">Custom amount per member</option>
                     </select>
+                  </label>
+
+                  {expenseSplit === "custom" && (
+                    <div className="custom-share-box">
+                      <strong>Enter each member's share</strong>
+                      {payerOptions.map((person) => (
+                        <label className="field-label" key={person}>
+                          {person} (₹)
+                          <input type="number" min="0" step="0.01" value={customShares[person] ?? ""} onChange={(event) => setCustomShares((previous) => ({ ...previous, [person]: event.target.value }))} placeholder="0.00" required />
+                        </label>
+                      ))}
+                      <small className="hint">Total allocated: {money(Object.values(customShares).reduce((sum, value) => sum + (Number(value) || 0), 0))}. Must match the expense amount exactly.</small>
+                    </div>
+                  )}
+
+                  <label className="field-label">
+                    Attach receipt (optional, image up to 2 MB)
+                    <input type="file" accept="image/*" onChange={handleReceiptUpload} />
+                    {receiptData && <img src={receiptData} alt="Receipt preview" className="receipt-preview" />}
                   </label>
 
                   <p className="hint">
@@ -1108,7 +1250,7 @@ function App() {
                       {categories.map((category) => <option key={category}>{category}</option>)}
                     </select>
                   </label>
-                  <button className="btn btn-outline" onClick={exportExpenses}>↓ Export CSV</button>
+                  <button className="btn btn-outline" onClick={exportExpenses}>↓ Export CSV</button>\n                  <button className="btn btn-outline" onClick={exportPdfReport}>PDF report</button>
                 </div>
 
                 <div className="toolbar">
@@ -1330,12 +1472,66 @@ function App() {
             </>
           )}
 
+          {page === "Payment Due Dates" && (
+            <>
+              <div className="page-intro"><span className="eyebrow">PAYMENT TRACKING</span><h1>Payment due dates</h1><p className="muted">Track expected payments and mark them when received.</p></div>
+              <div className="panel narrow-panel">
+                <form className="form-stack" onSubmit={addPaymentDue}>
+                  <label className="field-label">Person
+                    <select value={duePerson} onChange={(event) => setDuePerson(event.target.value)} required>
+                      <option value="">Select person</option>{people.filter((person) => person !== session.name).map((person) => <option key={person}>{person}</option>)}
+                    </select>
+                  </label>
+                  <div className="form-grid">
+                    <label className="field-label">Amount (₹)<input type="number" min="0.01" step="0.01" value={dueAmount} onChange={(event) => setDueAmount(event.target.value)} required /></label>
+                    <label className="field-label">Due date<input type="date" value={dueDate} onChange={(event) => setDueDate(event.target.value)} required /></label>
+                  </div>
+                  <label className="field-label">Note (optional)<input value={dueNote} onChange={(event) => setDueNote(event.target.value)} placeholder="e.g. Electricity bill share" /></label>
+                  <button className="btn btn-primary" type="submit">Add payment due</button>
+                </form>
+              </div>
+              <div className="panel">
+                {paymentDues.length ? paymentDues.map((due) => {
+                  const overdue = !due.done && due.dueDate < new Date().toLocaleDateString("en-CA");
+                  return <div className="list-row" key={due.id}>
+                    <div className="grow"><strong>{due.person} · {money(due.amount)}</strong><small>Due {new Date(`${due.dueDate}T00:00:00`).toLocaleDateString("en-IN")}{due.note ? ` · ${due.note}` : ""}</small>
+                    <span className={due.done ? "positive" : overdue ? "negative" : "neutral"}>{due.done ? "Paid" : overdue ? "Overdue" : "Upcoming"}</span></div>
+                    {!due.done && <button className="btn btn-outline" onClick={() => setPaymentDues((old) => old.map((item) => item.id === due.id ? { ...item, done: true, paidAt: new Date().toISOString() } : item))}>Mark paid</button>}
+                    <button className="text-danger" onClick={() => { if (window.confirm("Delete this due date?")) setPaymentDues((old) => old.filter((item) => item.id !== due.id)); }}>Delete</button>
+                  </div>;
+                }) : <Empty text="No payment due dates added yet." />}
+              </div>
+            </>
+          )}
+
           {page === "Analytics" && (
             <>
               <div className="page-intro">
                 <span className="eyebrow">INSIGHTS</span>
                 <h1>Expense analytics</h1>
                 <p className="muted">A category-wise view of your recorded spending.</p>
+              </div>
+
+              <div className="panel narrow-panel">
+                <span className="eyebrow">MONTHLY PLANNING</span>
+                <h3>Monthly budget</h3>
+                <form className="form-stack" onSubmit={(event) => { event.preventDefault(); notify("Monthly budget updated."); }}>
+                  <label className="field-label">Monthly spending limit (₹)
+                    <input type="number" min="0" step="0.01" value={monthlyBudget || ""} onChange={(event) => setMonthlyBudget(Number(event.target.value) || 0)} placeholder="Set your monthly budget" />
+                  </label>
+                </form>
+                <div className="budget-summary">
+                  <div><small>Spent this month</small><strong>{money(monthlySpent)}</strong></div>
+                  <div><small>Remaining</small><strong>{money(budgetRemaining)}</strong></div>
+                </div>
+                <div className="progress"><span style={{ width: `${monthlyBudget > 0 ? Math.min(100, monthlySpent / monthlyBudget * 100) : 0}%` }} /></div>
+                <p className="hint">{monthlyBudget > 0 ? `${Math.round(monthlySpent / monthlyBudget * 100)}% of your monthly budget used.` : "Set a budget to track monthly spending."}</p>
+                {monthlyBudget > 0 && monthlySpent >= monthlyBudget * .8 && <p className="budget-warning">{monthlySpent >= monthlyBudget ? "You have reached or exceeded your monthly budget." : "You have used at least 80% of your monthly budget."}</p>}
+              </div>
+
+              <div className="panel">
+                <div className="panel-title"><h3>Reports</h3><button className="btn btn-outline" onClick={exportPdfReport}>Download / Print PDF report</button></div>
+                <p className="hint">Choose “Save as PDF” in your browser's print dialog.</p>
               </div>
 
               <div className="stats-grid">
@@ -1403,6 +1599,7 @@ function App() {
                   <span>{expenses.length} expenses</span>
                   <span>{settlements.length} settlements</span>
                   <span>{reminders.length} reminders</span>
+                  <span>{paymentDues.length} due dates</span>
                 </div>
                 <div className="form-stack">
                   <div>
@@ -1464,6 +1661,7 @@ function ExpenseRow({ expense }) {
   return (
     <div className="list-row" style={{ flex: 1, minWidth: 0 }}>
       <div className="expense-icon">₹</div>
+      {expense.receipt && <a href={expense.receipt} target="_blank" rel="noreferrer"><img src={expense.receipt} alt="Receipt" className="receipt-thumb" /></a>}
       <div className="grow">
         <strong>{expense.title}</strong>
         <small>
