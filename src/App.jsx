@@ -316,6 +316,68 @@ function App() {
     notify("Group created successfully.");
   }
 
+  function deleteGroup(group) {
+    const linkedCount = expenses.filter((expense) => expense.groupId === group.id).length;
+    const message = linkedCount
+      ? `Delete "${group.name}" and its ${linkedCount} linked expense(s)? Those expenses will also be removed and balances will be recalculated. This cannot be undone.`
+      : `Delete the group "${group.name}"? This cannot be undone.`;
+
+    if (!window.confirm(message)) return;
+
+    setGroups((previous) => previous.filter((item) => item.id !== group.id));
+    setExpenses((previous) => previous.filter((item) => item.groupId !== group.id));
+    if (expenseGroup === group.id) setExpenseGroup("");
+    notify(`"${group.name}" deleted.`);
+  }
+
+  function clearTransactionHistory() {
+    if (!expenses.length && !settlements.length) {
+      notify("There is no transaction history to clear.");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      "Clear all expenses and settlement records for this account? Groups and reminders will be kept. This cannot be undone."
+    );
+    if (!confirmed) return;
+
+    setExpenses([]);
+    setSettlements([]);
+    setSearchText("");
+    setFilterGroup("all");
+    setFilterCategory("all");
+    notify("Expense and settlement history cleared.");
+  }
+
+  function clearAllWorkspaceData() {
+    const hasData = groups.length || expenses.length || settlements.length || reminders.length;
+    if (!hasData) {
+      notify("There is no workspace data to clear.");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      "DELETE ALL WORKSPACE DATA? This will permanently clear every group, expense, settlement and reminder for this account. Your login and profile will remain. This cannot be undone."
+    );
+    if (!confirmed) return;
+
+    setGroups([]);
+    setExpenses([]);
+    setSettlements([]);
+    setReminders([]);
+    setGroupName("");
+    setGroupMemberInput("");
+    setGroupMemberList([]);
+    setExpenseTitle("");
+    setExpenseAmount("");
+    setExpenseGroup("");
+    setSearchText("");
+    setFilterGroup("all");
+    setFilterCategory("all");
+    setEditingExpenseId(null);
+    notify("All workspace data has been cleared.");
+  }
+
   function addExpense(event) {
     event.preventDefault();
 
@@ -929,6 +991,13 @@ function App() {
                             <small>Created {new Date(group.createdAt).toLocaleDateString("en-IN")}</small>
                           </div>
                           <span className="pill">{group.members.length} members</span>
+                          <button
+                            className="btn btn-danger-outline"
+                            type="button"
+                            onClick={() => deleteGroup(group)}
+                          >
+                            Delete group
+                          </button>
                         </div>
                         <div className="member-chips">
                           {group.members.map((member) => <span key={member}>{member}</span>)}
@@ -1321,6 +1390,46 @@ function App() {
                   </label>
                   <button className="btn btn-primary" type="submit">Save changes</button>
                 </form>
+              </div>
+
+              <div className="panel narrow-panel data-management-panel">
+                <span className="eyebrow">DATA MANAGEMENT</span>
+                <h3>Manage previous data</h3>
+                <p className="muted">
+                  Clear old records when you want to start fresh. These actions affect only this account in this browser.
+                </p>
+                <div className="data-counts">
+                  <span>{groups.length} groups</span>
+                  <span>{expenses.length} expenses</span>
+                  <span>{settlements.length} settlements</span>
+                  <span>{reminders.length} reminders</span>
+                </div>
+                <div className="form-stack">
+                  <div>
+                    <strong className="danger-action-title">Clear transaction history</strong>
+                    <p className="hint">Deletes all expenses and settlement records. Your groups and reminders remain.</p>
+                    <button
+                      className="btn btn-danger-outline"
+                      type="button"
+                      onClick={clearTransactionHistory}
+                      disabled={!expenses.length && !settlements.length}
+                    >
+                      Clear expenses and settlements
+                    </button>
+                  </div>
+                  <div className="danger-zone">
+                    <strong className="danger-action-title">Clear all workspace data</strong>
+                    <p className="hint">Deletes all groups, expenses, settlements and reminders. Your account and profile remain.</p>
+                    <button
+                      className="btn btn-danger"
+                      type="button"
+                      onClick={clearAllWorkspaceData}
+                      disabled={!groups.length && !expenses.length && !settlements.length && !reminders.length}
+                    >
+                      Clear all previous data
+                    </button>
+                  </div>
+                </div>
               </div>
             </>
           )}
