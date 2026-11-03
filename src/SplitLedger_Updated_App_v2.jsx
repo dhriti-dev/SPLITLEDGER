@@ -55,7 +55,8 @@ function App() {
   const [dataOwnerPhone, setDataOwnerPhone] = useState("");
 
   const [groupName, setGroupName] = useState("");
-  const [groupMembers, setGroupMembers] = useState("");
+  const [groupMemberInput, setGroupMemberInput] = useState("");
+  const [groupMemberList, setGroupMemberList] = useState([]);
   const [expenseTitle, setExpenseTitle] = useState("");
   const [expenseAmount, setExpenseAmount] = useState("");
   const [expenseGroup, setExpenseGroup] = useState("");
@@ -70,6 +71,11 @@ function App() {
   const [editCategory, setEditCategory] = useState("Food");
   const [settlePerson, setSettlePerson] = useState("");
   const [settleAmount, setSettleAmount] = useState("");
+  const [settlePaymentMode, setSettlePaymentMode] = useState("UPI");
+  const [settlePaymentDate, setSettlePaymentDate] = useState(
+    new Date().toLocaleDateString("en-CA")
+  );
+  const [settleReference, setSettleReference] = useState("");
   const [settleNote, setSettleNote] = useState("");
   const [reminderText, setReminderText] = useState("");
   const [profileName, setProfileName] = useState("");
@@ -287,7 +293,8 @@ function App() {
 
     const members = [
       ...new Map(
-        [session.name, ...groupMembers.split(",").map((name) => name.trim())]
+        [session.name, ...groupMemberList]
+          .map((name) => name.trim())
           .filter(Boolean)
           .map((name) => [name.toLowerCase(), name])
       ).values(),
@@ -304,7 +311,8 @@ function App() {
     ]);
 
     setGroupName("");
-    setGroupMembers("");
+    setGroupMemberInput("");
+    setGroupMemberList([]);
     notify("Group created successfully.");
   }
 
@@ -446,12 +454,20 @@ function App() {
       return;
     }
 
+    if (!settlePaymentDate) {
+      notify("Please select the payment date.");
+      return;
+    }
+
     setSettlements((previous) => [
       {
         id: makeId(),
         from: session.name,
         to: settlePerson,
         amount,
+        paymentMode: settlePaymentMode,
+        paymentDate: settlePaymentDate,
+        reference: settleReference.trim(),
         note: settleNote.trim(),
         date: new Date().toISOString(),
       },
@@ -459,8 +475,11 @@ function App() {
     ]);
 
     setSettleAmount("");
+    setSettlePaymentMode("UPI");
+    setSettlePaymentDate(new Date().toLocaleDateString("en-CA"));
+    setSettleReference("");
     setSettleNote("");
-    notify("Payment recorded.");
+    notify("Payment recorded successfully.");
     setPage("Settlement History");
   }
 
@@ -834,11 +853,66 @@ function App() {
                     Group name
                     <input value={groupName} onChange={(event) => setGroupName(event.target.value)} placeholder="e.g. Goa Trip" required />
                   </label>
-                  <label className="field-label">
+                  <div className="field-label">
                     Members
-                    <input value={groupMembers} onChange={(event) => setGroupMembers(event.target.value)} placeholder="Names separated by commas" />
-                    <span className="hint">You are included automatically.</span>
-                  </label>
+                    <div className="member-entry-row">
+                      <input
+                        value={groupMemberInput}
+                        onChange={(event) => setGroupMemberInput(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") {
+                            event.preventDefault();
+                            const cleanName = groupMemberInput.trim();
+                            if (cleanName && ![session.name, ...groupMemberList].some(
+                              (name) => name.toLowerCase() === cleanName.toLowerCase()
+                            )) {
+                              setGroupMemberList((previous) => [...previous, cleanName]);
+                            }
+                            setGroupMemberInput("");
+                          }
+                        }}
+                        placeholder="Enter a member name"
+                      />
+                      <button
+                        className="btn btn-outline add-member-btn"
+                        type="button"
+                        onClick={() => {
+                          const cleanName = groupMemberInput.trim();
+                          if (!cleanName) {
+                            notify("Enter a member name first.");
+                            return;
+                          }
+                          if ([session.name, ...groupMemberList].some(
+                            (name) => name.toLowerCase() === cleanName.toLowerCase()
+                          )) {
+                            notify("That member is already in the group.");
+                            return;
+                          }
+                          setGroupMemberList((previous) => [...previous, cleanName]);
+                          setGroupMemberInput("");
+                        }}
+                        aria-label="Add group member"
+                      >
+                        + Add
+                      </button>
+                    </div>
+                    <div className="member-chips member-entry-chips">
+                      <span className="member-chip-you">{session.name} (You)</span>
+                      {groupMemberList.map((member) => (
+                        <span className="member-chip-edit" key={member}>
+                          {member}
+                          <button
+                            type="button"
+                            onClick={() => setGroupMemberList((previous) => previous.filter((name) => name !== member))}
+                            aria-label={`Remove ${member}`}
+                          >
+                            ×
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                    <span className="hint">Add each member separately using the + Add button.</span>
+                  </div>
                   <button className="btn btn-primary" type="submit">Create group</button>
                 </form>
               </div>
@@ -1067,10 +1141,38 @@ function App() {
                     Amount (₹)
                     <input type="number" min="0.01" step="0.01" value={settleAmount} onChange={(event) => setSettleAmount(event.target.value)} placeholder="0.00" required />
                   </label>
+                  <div className="form-grid">
+                    <label className="field-label">
+                      Payment mode
+                      <select value={settlePaymentMode} onChange={(event) => setSettlePaymentMode(event.target.value)}>
+                        <option>UPI</option>
+                        <option>Cash</option>
+                        <option>Bank transfer</option>
+                        <option>Debit card</option>
+                        <option>Credit card</option>
+                        <option>Other</option>
+                      </select>
+                    </label>
+                    <label className="field-label">
+                      Payment date
+                      <input
+                        type="date"
+                        value={settlePaymentDate}
+                        max={new Date().toLocaleDateString("en-CA")}
+                        onChange={(event) => setSettlePaymentDate(event.target.value)}
+                        required
+                      />
+                    </label>
+                  </div>
+                  <label className="field-label">
+                    Transaction reference (optional)
+                    <input value={settleReference} onChange={(event) => setSettleReference(event.target.value)} placeholder="UPI ID / transaction reference" />
+                  </label>
                   <label className="field-label">
                     Note (optional)
-                    <input value={settleNote} onChange={(event) => setSettleNote(event.target.value)} placeholder="Payment note" />
+                    <input value={settleNote} onChange={(event) => setSettleNote(event.target.value)} placeholder="Add a short payment note" />
                   </label>
+                  <p className="hint">Record the payment method and date for your own settlement history. This does not process an actual payment.</p>
                   <button className="btn btn-primary" type="submit">Record payment</button>
                 </form>
               </div>
@@ -1091,7 +1193,14 @@ function App() {
                         <div className="group-icon">✓</div>
                         <div className="grow">
                           <strong>{item.from} paid {item.to}</strong>
-                          <small>{item.note || "Settlement"} · {new Date(item.date).toLocaleDateString("en-IN")}</small>
+                          <small>
+                            {item.paymentMode || "Payment mode not specified"} ·{" "}
+                            {item.paymentDate
+                              ? new Date(`${item.paymentDate}T00:00:00`).toLocaleDateString("en-IN")
+                              : new Date(item.date).toLocaleDateString("en-IN")}
+                          </small>
+                          {item.reference && <small>Reference: {item.reference}</small>}
+                          {item.note && <small>Note: {item.note}</small>}
                         </div>
                         <strong className="amount">{money(item.amount)}</strong>
                       </div>

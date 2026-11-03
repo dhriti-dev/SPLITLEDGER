@@ -637,3 +637,74 @@ input:focus, select:focus {
   .auth-card { padding: 27px 21px; }
   .stat-value { font-size: 27px; }
 }
+
+
+/* SplitLedger v2 — member picker and payment details */
+.member-entry-row {
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+}
+
+.member-entry-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+.add-member-btn {
+  white-space: nowrap;
+  min-width: 92px;
+}
+
+.member-entry-chips {
+  padding: 12px 0 0;
+  align-items: center;
+}
+
+.member-entry-chips .member-chip-you,
+.member-entry-chips .member-chip-edit {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border-radius: 999px;
+  padding: 7px 10px;
+  background: #f0edff;
+  color: #6552d8;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.member-entry-chips .member-chip-you {
+  background: #e9f8f1;
+  color: #21845e;
+}
+
+.member-entry-chips .member-chip-edit button {
+  display: inline-grid;
+  place-items: center;
+  width: 19px;
+  height: 19px;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(101, 82, 216, .13);
+  color: #5140c9;
+  font-size: 16px;
+  line-height: 1;
+  padding: 0;
+  cursor: pointer;
+}
+
+.member-entry-chips .member-chip-edit button:hover {
+  background: #6552d8;
+  color: #fff;
+}
+
+@media (max-width: 430px) {
+  .member-entry-row {
+    flex-direction: column;
+  }
+
+  .add-member-btn {
+    width: 100%;
+  }
+}
