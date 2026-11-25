@@ -159,8 +159,11 @@ function App() {
     setMonthlyBudget(Number(readJSON(userKey("monthlyBudget", phone), 0)) || 0);
     setProfileName(session?.name || "");
     setDataOwnerPhone(phone);
+    // Keep the signed-in user as the default only for personal expenses.
+    // Group selection replaces this list with that group's actual members.
     setExpenseParticipants([session?.name || ""]);
-    setExpensePayer(session?.name || "");
+    // An empty payer lets the selected group's member-based default take effect.
+    setExpensePayer("");
   }, [phone]);
 
   useEffect(() => {
@@ -495,15 +498,27 @@ function App() {
     }
 
     const group = groups.find((item) => item.id === expenseGroup);
-    const groupMembers = group?.members?.length ? group.members : [session.name];
-    const allowedParticipants = [...new Set([...groupMembers, session.name])];
-    const payer = expensePayer || (group?.members?.[0] || session.name);
+    // For a group expense, only actual group members may pay or participate.
+    // The signed-in account is not implicitly inserted into the group.
+    const allowedParticipants = group
+      ? [...new Set(group.members || [])]
+      : [session.name];
+    const defaultPayer = group
+      ? (allowedParticipants.includes(session.name) ? session.name : allowedParticipants[0])
+      : session.name;
+    const payer = expensePayer || defaultPayer;
+
+    if (!payer || !allowedParticipants.includes(payer)) {
+      notify("Select a payer who belongs to this group.");
+      return;
+    }
+
     const participants = expenseSplit === "payer"
       ? [payer]
       : [...new Set(expenseParticipants.filter((person) => allowedParticipants.includes(person)))];
 
     if (!participants.length) {
-      notify("Select at least one participant for this expense.");
+      notify("Select at least one group member who participated in this expense.");
       return;
     }
 
@@ -520,6 +535,10 @@ function App() {
 
     if (primaryPaise < 0) {
       notify("Payer contributions cannot exceed the total expense.");
+      return;
+    }
+    if (extraPayments.some((item) => !allowedParticipants.includes(item.person))) {
+      notify("Every additional payer must be a member of the selected group.");
       return;
     }
     const paymentNames = [payer, ...extraPayments.map((item) => item.person)];
@@ -1065,14 +1084,14 @@ function App() {
 
   const selectedGroup = groups.find((group) => group.id === expenseGroup);
   const payerOptions = selectedGroup?.members?.length
-    ? [...new Set([...selectedGroup.members, session.name])]
+    ? [...new Set(selectedGroup.members)]
     : [session.name];
   const participantOptions = selectedGroup?.members?.length
-    ? [...new Set([...selectedGroup.members, session.name])]
+    ? [...new Set(selectedGroup.members)]
     : [session.name];
-  const defaultPayer = selectedGroup?.members?.includes(session.name)
-    ? session.name
-    : (selectedGroup?.members?.[0] || session.name);
+  const defaultPayer = selectedGroup?.members?.length
+    ? (selectedGroup.members.includes(session.name) ? session.name : selectedGroup.members[0])
+    : session.name;
   const activePayer = expensePayer || defaultPayer;
   const activeParticipants = expenseSplit === "payer" ? [activePayer] : expenseParticipants;
   const previewAmount = Number(expenseAmount) || 0;
@@ -1343,9 +1362,12 @@ function App() {
                       value={expenseGroup}
                       onChange={(event) => {
                         const nextGroup = groups.find((item) => item.id === event.target.value);
-                        const nextMembers = nextGroup?.members?.length ? nextGroup.members : [session.name];
+                        const nextMembers = nextGroup?.members?.length ? [...new Set(nextGroup.members)] : [session.name];
+                        const nextPayer = nextGroup?.members?.length
+                          ? (nextGroup.members.includes(session.name) ? session.name : nextGroup.members[0])
+                          : session.name;
                         setExpenseGroup(event.target.value);
-                        setExpensePayer(nextGroup?.members?.includes(session.name) ? session.name : (nextGroup?.members?.[0] || session.name));
+                        setExpensePayer(nextPayer);
                         setExpenseParticipants([...nextMembers]);
                         setCustomShares({});
                         setPercentageShares(Object.fromEntries(nextMembers.map((person) => [person, String(100 / nextMembers.length)])));
