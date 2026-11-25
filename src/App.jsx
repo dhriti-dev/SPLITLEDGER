@@ -128,6 +128,7 @@ function App() {
   const [dueAmount, setDueAmount] = useState("");
   const [dueDate, setDueDate] = useState("");
   const [dueNote, setDueNote] = useState("");
+  const [dueTab, setDueTab] = useState("reminders");
   const [selectedChartMonth, setSelectedChartMonth] = useState(new Date().toISOString().slice(0, 7));
   const [selectedChartCategory, setSelectedChartCategory] = useState("all");
 
@@ -809,7 +810,8 @@ function App() {
     setDueAmount("");
     setDueDate("");
     setDueNote("");
-    notify("Payment due date saved.");
+    setDueTab("reminders");
+    notify("Payment reminder saved.");
   }
 
   function generateSmartDueDates() {
@@ -2214,77 +2216,67 @@ function App() {
           {page === "Payment Due Dates" && (
             <>
               <div className="page-intro">
-                <span className="eyebrow">SMART PAYMENT TRACKING</span>
-                <h1>Payment due dates</h1>
-                <p className="muted">Turn outstanding balances into planned follow-ups and keep due dates in sync as you settle.</p>
+                <span className="eyebrow">SIMPLE PAYMENT REMINDERS</span>
+                <h1>Payment reminders</h1>
+                <p className="muted">Keep track of money you need to receive or pay. Add a reminder so nothing gets missed.</p>
               </div>
 
-              <div className="smart-due-banner">
-                <div>
-                  <span className="eyebrow">SMART ASSISTANT</span>
-                  <h3>Find payments that need attention</h3>
-                  <p>SplitLedger can read your current net balances and create suggested due dates for people who owe you or people you need to pay. Suggestions are due in 7 days and can be edited or deleted.</p>
+              <div className="due-simple-summary">
+                <div className="due-simple-card"><span><i className="due-mini-icon receive">↓</i> To receive</span><strong>{money(paymentDues.filter((due) => !due.done && (due.direction || "theyOweMe") === "theyOweMe").reduce((sum, due) => sum + Number(due.amount || 0), 0))}</strong></div>
+                <div className="due-simple-card"><span><i className="due-mini-icon pay">↑</i> To pay</span><strong>{money(paymentDues.filter((due) => !due.done && due.direction === "iOweThem").reduce((sum, due) => sum + Number(due.amount || 0), 0))}</strong></div>
+                <div className="due-simple-card"><span><i className="due-mini-icon late">!</i> Overdue</span><strong>{paymentDues.filter((due) => !due.done && due.dueDate < new Date().toLocaleDateString("en-CA")).length}</strong></div>
+              </div>
+
+              <div className="due-tabs" role="tablist" aria-label="Payment reminders">
+                <button type="button" className={dueTab === "reminders" ? "active" : ""} onClick={() => setDueTab("reminders")}>My reminders</button>
+                <button type="button" className={dueTab === "add" ? "active" : ""} onClick={() => setDueTab("add")}>+ Add reminder</button>
+              </div>
+
+              {dueTab === "add" ? (
+                <div className="panel due-add-panel">
+                  <div className="due-panel-heading"><div><span className="eyebrow">NEW REMINDER</span><h3>Who needs to pay?</h3><p>Just add the basic details. You can update or delete this reminder later.</p></div></div>
+                  <form className="form-stack" onSubmit={(event) => { addPaymentDue(event); }}>
+                    <label className="field-label">Payment type
+                      <select value={dueDirection} onChange={(event) => { setDueDirection(event.target.value); setDueAmount(""); }}>
+                        <option value="theyOweMe">Someone owes me</option>
+                        <option value="iOweThem">I owe someone</option>
+                      </select>
+                    </label>
+                    <label className="field-label">Who is it?
+                      <select value={duePerson} onChange={(event) => { setDuePerson(event.target.value); setDueAmount(""); }} required>
+                        <option value="">Choose a person</option>{people.filter((person) => person !== session.name).map((person) => <option key={person}>{person}</option>)}
+                      </select>
+                    </label>
+                    {duePerson && dueOutstandingForSelected > 0 && (
+                      <div className="settlement-balance-callout"><span>Current balance with {duePerson}</span><strong>{money(dueOutstandingForSelected)}</strong><button type="button" className="text-button" onClick={() => setDueAmount(dueOutstandingForSelected.toFixed(2))}>Use this amount</button></div>
+                    )}
+                    <div className="form-grid">
+                      <label className="field-label">Amount (₹)<input type="number" min="0.01" step="0.01" value={dueAmount} onChange={(event) => setDueAmount(event.target.value)} placeholder="e.g. 500" required /></label>
+                      <label className="field-label">When is it due?<input type="date" min={new Date().toLocaleDateString("en-CA")} value={dueDate} onChange={(event) => setDueDate(event.target.value)} required /></label>
+                    </div>
+                    <label className="field-label">What is it for? <span className="muted">(optional)</span><input value={dueNote} onChange={(event) => setDueNote(event.target.value)} placeholder="e.g. Dinner, rent, trip" /></label>
+                    <div className="due-form-actions"><button className="btn btn-primary" type="submit">Save reminder</button><button className="btn btn-outline" type="button" onClick={() => setDueTab("reminders")}>Cancel</button></div>
+                  </form>
                 </div>
-                <button className="btn btn-primary" type="button" onClick={generateSmartDueDates}>Generate from balances</button>
-              </div>
-
-              <div className="due-summary-grid">
-                <div className="due-summary-card"><small>Waiting to receive</small><strong>{money(paymentDues.filter((due) => !due.done && (due.direction || "theyOweMe") === "theyOweMe").reduce((sum, due) => sum + Number(due.amount || 0), 0))}</strong></div>
-                <div className="due-summary-card"><small>You need to pay</small><strong>{money(paymentDues.filter((due) => !due.done && due.direction === "iOweThem").reduce((sum, due) => sum + Number(due.amount || 0), 0))}</strong></div>
-                <div className="due-summary-card"><small>Overdue items</small><strong>{paymentDues.filter((due) => !due.done && due.dueDate < new Date().toLocaleDateString("en-CA")).length}</strong></div>
-              </div>
-
-              <div className="panel narrow-panel">
-                <h3>Add a payment plan</h3>
-                <form className="form-stack" onSubmit={addPaymentDue}>
-                  <label className="field-label">Payment direction
-                    <select value={dueDirection} onChange={(event) => { setDueDirection(event.target.value); setDueAmount(""); }}>
-                      <option value="theyOweMe">They owe me</option>
-                      <option value="iOweThem">I owe them</option>
-                    </select>
-                  </label>
-                  <label className="field-label">Person
-                    <select value={duePerson} onChange={(event) => { setDuePerson(event.target.value); setDueAmount(""); }} required>
-                      <option value="">Select person</option>{people.filter((person) => person !== session.name).map((person) => <option key={person}>{person}</option>)}
-                    </select>
-                  </label>
-                  {duePerson && dueOutstandingForSelected > 0 && (
-                    <div className="settlement-balance-callout">
-                      <span>Current outstanding balance</span>
-                      <strong>{money(dueOutstandingForSelected)}</strong>
-                      <button type="button" className="text-button" onClick={() => setDueAmount(dueOutstandingForSelected.toFixed(2))}>Use current balance</button>
-                    </div>
-                  )}
-                  <div className="form-grid">
-                    <label className="field-label">Amount (₹)<input type="number" min="0.01" step="0.01" value={dueAmount} onChange={(event) => setDueAmount(event.target.value)} required /></label>
-                    <label className="field-label">Due date<input type="date" min={new Date().toLocaleDateString("en-CA")} value={dueDate} onChange={(event) => setDueDate(event.target.value)} required /></label>
-                  </div>
-                  <label className="field-label">Note (optional)<input value={dueNote} onChange={(event) => setDueNote(event.target.value)} placeholder="e.g. Rent share, trip balance" /></label>
-                  <button className="btn btn-primary" type="submit">Save payment plan</button>
-                </form>
-              </div>
-
-              <div className="panel">
-                <div className="panel-title"><h3>Upcoming and overdue payments</h3><span className="hint">{paymentDues.filter((due) => !due.done).length} open</span></div>
-                {paymentDues.length ? paymentDues.slice().sort((a, b) => a.done - b.done || a.dueDate.localeCompare(b.dueDate)).map((due) => {
-                  const today = new Date();
-                  today.setHours(0,0,0,0);
-                  const dueDay = new Date(`${due.dueDate}T00:00:00`);
-                  const days = Math.round((dueDay - today) / 86400000);
-                  const overdue = !due.done && days < 0;
-                  const direction = due.direction || "theyOweMe";
-                  return <div className="list-row smart-due-row" key={due.id}>
-                    <div className="due-status-dot" data-status={due.done ? "paid" : overdue ? "overdue" : days <= 3 ? "soon" : "upcoming"} />
-                    <div className="grow">
-                      <strong>{direction === "iOweThem" ? `You owe ${due.person}` : `${due.person} owes you`} · {money(due.amount)}</strong>
-                      <small>Due {new Date(`${due.dueDate}T00:00:00`).toLocaleDateString("en-IN")}{due.note ? ` · ${due.note}` : ""}</small>
-                      <span className={due.done ? "positive" : overdue ? "negative" : days <= 3 ? "due-soon" : "neutral"}>{due.done ? "Completed" : overdue ? `${Math.abs(days)} day(s) overdue` : days === 0 ? "Due today" : days <= 3 ? `Due in ${days} day(s)` : `Due in ${days} days`}{due.autoGenerated ? " · Smart suggestion" : ""}</span>
-                    </div>
-                    {!due.done && <button className="btn btn-outline" onClick={() => openDueForSettlement(due)}>Record settlement</button>}
-                    <button className="text-danger" onClick={() => { if (window.confirm("Delete this payment plan?")) setPaymentDues((old) => old.filter((item) => item.id !== due.id)); }}>Delete</button>
-                  </div>;
-                }) : <Empty text="No payment plans yet. Generate suggestions from your balances or add one manually." />}
-              </div>
+              ) : (
+                <div className="panel due-list-panel">
+                  <div className="panel-title"><div><h3>Your reminders</h3><p className="muted">A simple list of payments to follow up.</p></div><button className="btn btn-primary" type="button" onClick={() => setDueTab("add")}>+ Add reminder</button></div>
+                  <div className="due-smart-tip"><div><strong>Want a quick start?</strong><span>SplitLedger can suggest reminders from your current balances, due in 7 days.</span></div><button type="button" className="btn btn-outline" onClick={generateSmartDueDates}>Suggest for me</button></div>
+                  {paymentDues.length ? paymentDues.slice().sort((a, b) => a.done - b.done || a.dueDate.localeCompare(b.dueDate)).map((due) => {
+                    const today = new Date(); today.setHours(0,0,0,0);
+                    const dueDay = new Date(`${due.dueDate}T00:00:00`);
+                    const days = Math.round((dueDay - today) / 86400000);
+                    const overdue = !due.done && days < 0;
+                    const direction = due.direction || "theyOweMe";
+                    return <div className="list-row smart-due-row" key={due.id}>
+                      <div className="due-status-dot" data-status={due.done ? "paid" : overdue ? "overdue" : days <= 3 ? "soon" : "upcoming"} />
+                      <div className="grow"><strong>{direction === "iOweThem" ? `You need to pay ${due.person}` : `${due.person} needs to pay you`} · {money(due.amount)}</strong><small>Due {new Date(`${due.dueDate}T00:00:00`).toLocaleDateString("en-IN")}{due.note ? ` · ${due.note}` : ""}</small><span className={due.done ? "positive" : overdue ? "negative" : days <= 3 ? "due-soon" : "neutral"}>{due.done ? "Completed" : overdue ? `${Math.abs(days)} day(s) overdue` : days === 0 ? "Due today" : `Due in ${days} day(s)`}{due.autoGenerated ? " · Suggested" : ""}</span></div>
+                      {!due.done && <button className="btn btn-outline" onClick={() => openDueForSettlement(due)}>Record payment</button>}
+                      <button className="text-danger" onClick={() => { if (window.confirm("Delete this reminder?")) setPaymentDues((old) => old.filter((item) => item.id !== due.id)); }}>Delete</button>
+                    </div>;
+                  }) : <Empty text="No reminders yet. Add one to keep track of a payment." />}
+                </div>
+              )}
             </>
           )}
 

@@ -1073,3 +1073,20 @@ input:focus, select:focus {
   .settlement-flow-preview strong { font-size: 13px; }
   .settlement-overview-card strong { font-size: 22px; }
 }
+
+/* Simplified payment reminders page */
+.due-simple-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin:22px 0}
+.due-simple-card{background:#fff;border:1px solid #e8e5f5;border-radius:16px;padding:18px 20px;display:flex;flex-direction:column;gap:10px;min-width:0}
+.due-simple-card span{display:flex;align-items:center;gap:9px;color:#77738e;font-size:13px;font-weight:600}
+.due-simple-card strong{font-size:25px;color:#30265f;letter-spacing:-.5px}
+.due-mini-icon{font-style:normal;width:24px;height:24px;border-radius:8px;display:inline-grid;place-items:center;font-weight:800;background:#eeeaff;color:#624ce0}
+.due-mini-icon.pay{background:#fff1e8;color:#c56a2c}.due-mini-icon.late{background:#ffeded;color:#d14d55}
+.due-tabs{display:flex;gap:8px;border-bottom:1px solid #e7e3f2;margin:24px 0 18px;padding-bottom:10px}
+.due-tabs button{border:0;background:transparent;color:#77738e;font:inherit;font-weight:650;padding:11px 18px;border-radius:10px;cursor:pointer}
+.due-tabs button.active{background:#eeeaff;color:#5943d2}
+.due-add-panel{max-width:720px}.due-panel-heading{margin-bottom:18px}.due-panel-heading h3{margin:7px 0}.due-panel-heading p,.due-list-panel .panel-title p{margin:5px 0 0;font-size:13px}
+.due-form-actions{display:flex;gap:10px;align-items:center;margin-top:5px}
+.due-smart-tip{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:14px 16px;margin:16px 0;border:1px solid #e9e5fb;background:#faf9ff;border-radius:13px}
+.due-smart-tip div{display:flex;flex-direction:column;gap:4px}.due-smart-tip span{font-size:13px;color:#77738e}
+.due-list-panel .panel-title{align-items:center}.due-list-panel .panel-title .btn{white-space:nowrap}
+@media(max-width:700px){.due-simple-summary{grid-template-columns:1fr}.due-simple-card{padding:14px 16px}.due-smart-tip{align-items:flex-start;flex-direction:column}.due-list-panel .panel-title{align-items:flex-start;gap:12px;flex-direction:column}.due-form-actions{flex-wrap:wrap}}
