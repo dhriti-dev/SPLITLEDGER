@@ -936,3 +936,31 @@ input:focus, select:focus {
   background: transparent;
   box-shadow: none;
 }
+
+
+/* Clear settlement direction and smart payment due workflow */
+.payment-direction-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
+.payment-direction-card { display:grid; grid-template-columns:36px 1fr; column-gap:10px; align-items:center; text-align:left; padding:13px; border:1px solid #e7e3f4; border-radius:12px; background:#fff; color:#393451; cursor:pointer; transition:border-color .18s ease,background .18s ease,box-shadow .18s ease; }
+.payment-direction-card:hover { border-color:#a69af5; background:#faf9ff; }
+.payment-direction-card.active { border-color:#7563ed; background:#f4f1ff; box-shadow:0 0 0 3px #7563ed1c; }
+.payment-direction-icon { grid-row:span 2; display:grid; place-items:center; width:36px; height:36px; border-radius:10px; background:#ece8ff; color:#5b49d5; font-size:20px; font-weight:800; }
+.payment-direction-card strong { font-size:12px; }
+.payment-direction-card small { color:#85819c; font-size:10px; line-height:1.4; margin-top:3px; }
+.settlement-balance-callout { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px 14px; padding:13px 14px; border:1px solid #e4defe; border-radius:11px; background:linear-gradient(120deg,#faf9ff,#f2efff); color:#68627f; font-size:12px; }
+.settlement-balance-callout strong { color:#33276f; font-size:18px; font-variant-numeric:tabular-nums; }
+.text-button { border:0; background:transparent; color:#5b49d5; padding:3px 0; font-size:11px; font-weight:800; cursor:pointer; }
+.smart-due-banner { display:flex; align-items:center; justify-content:space-between; gap:22px; padding:20px; margin-bottom:18px; border:1px solid #e5e0ff; border-radius:16px; background:linear-gradient(115deg,#fbfaff,#f1efff); }
+.smart-due-banner h3 { margin:5px 0 7px; color:#302b52; }
+.smart-due-banner p { max-width:690px; margin:0; color:#77738f; font-size:12px; line-height:1.6; }
+.due-summary-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; margin-bottom:18px; }
+.due-summary-card { display:grid; gap:7px; padding:15px; border:1px solid #e9e6f5; border-radius:12px; background:#fff; }
+.due-summary-card small { color:#85819c; font-size:11px; }
+.due-summary-card strong { color:#302568; font-size:19px; font-weight:800; }
+.smart-due-row { align-items:center; }
+.due-status-dot { width:10px; height:10px; min-width:10px; border-radius:50%; background:#8d83d9; box-shadow:0 0 0 4px #efedff; }
+.due-status-dot[data-status="paid"] { background:#28a56c; box-shadow:0 0 0 4px #e5f7ee; }
+.due-status-dot[data-status="overdue"] { background:#d64d61; box-shadow:0 0 0 4px #fff0f2; }
+.due-status-dot[data-status="soon"] { background:#d58a2b; box-shadow:0 0 0 4px #fff5e8; }
+.due-soon { color:#b9781d; font-size:11px; font-weight:700; }
+@media(max-width:700px) { .smart-due-banner { align-items:stretch; flex-direction:column; } .smart-due-banner .btn { width:100%; } .due-summary-grid { grid-template-columns:1fr; } }
+@media(max-width:520px) { .payment-direction-grid { grid-template-columns:1fr; } }
