@@ -805,3 +805,23 @@ input:focus, select:focus {
 .budget-summary small { color:#77758f; font-size:11px; }
 .budget-summary strong { margin-top:6px; color:#302568; font-size:18px; }
 .budget-warning { padding:10px 12px; border-radius:9px; background:#fff4e7; color:#9a5a12; font-size:12px; }
+
+/* Interactive analytics charts */
+.interactive-chart{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px;align-items:end;min-height:220px;padding:18px 8px 4px}
+.chart-column{display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:9px;min-width:0;border:0;background:transparent;padding:5px 3px;border-radius:10px;color:inherit}
+.chart-column:hover,.chart-column.selected{background:#f3f1ff}
+.chart-value{font-size:10px;font-weight:700;color:#77738f;white-space:nowrap}
+.chart-track{height:145px;width:min(100%,42px);display:flex;align-items:flex-end;background:#f0eff8;border-radius:9px 9px 5px 5px;overflow:hidden}
+.chart-bar{display:block;width:100%;min-height:3px;background:linear-gradient(180deg,#a69aff,#6556d9);border-radius:8px 8px 4px 4px;transition:height .3s ease,filter .2s ease}
+.chart-column.selected .chart-bar{background:linear-gradient(180deg,#6f5eff,#3f2dbd);filter:drop-shadow(0 4px 7px #6556d944)}
+.chart-label{font-size:11px;font-weight:700;color:#77758f}
+.chart-selection-summary{display:flex;justify-content:space-between;align-items:center;border-top:1px solid #efedf6;padding:14px 4px 0;margin-top:12px;color:#77758f;font-size:12px}
+.chart-selection-summary strong{font:800 18px Manrope;color:#282442}
+.interactive-category-chart{display:grid;gap:12px}
+.category-chart-row{display:grid;gap:8px;text-align:left;border:1px solid transparent;border-radius:9px;background:transparent;padding:10px;cursor:pointer}
+.category-chart-row:hover,.category-chart-row.selected{background:#f7f5ff;border-color:#e5e0ff}
+.category-chart-heading{display:flex;justify-content:space-between;gap:12px;font-size:11px;color:#77758f}
+.category-chart-heading strong{color:#302c4b}
+.category-chart-track{height:9px;background:#efedf7;border-radius:20px;overflow:hidden}
+.category-chart-track span{height:100%;display:block;background:linear-gradient(90deg,#8878f4,#5b49d5);border-radius:20px;transition:width .3s ease}
+@media(max-width:520px){.interactive-chart{gap:4px;padding-inline:0}.chart-value{font-size:8px}.chart-track{height:115px;width:28px}.chart-label{font-size:10px}.category-chart-heading{font-size:10px}}

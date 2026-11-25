@@ -42,7 +42,10 @@ const csvCell = (value) => `"${String(value ?? "").replace(/"/g, '""')}"`;
 
 function App() {
   const [users, setUsers] = useState(() => readJSON(USER_KEY, []));
-  const [session, setSession] = useState(() => readJSON(SESSION_KEY, null));
+  const [session, setSession] = useState(() => {
+    const savedSession = readJSON(SESSION_KEY, null);
+    return savedSession?.admin ? null : savedSession;
+  });
   const [page, setPage] = useState("Dashboard");
   const [authMode, setAuthMode] = useState("login");
   const [authName, setAuthName] = useState("");
@@ -91,10 +94,18 @@ function App() {
   const [dueAmount, setDueAmount] = useState("");
   const [dueDate, setDueDate] = useState("");
   const [dueNote, setDueNote] = useState("");
+  const [selectedChartMonth, setSelectedChartMonth] = useState(new Date().toISOString().slice(0, 7));
+  const [selectedChartCategory, setSelectedChartCategory] = useState("all");
 
   useEffect(() => writeJSON(USER_KEY, users), [users]);
 
   useEffect(() => {
+    // Legacy demo-admin sessions were client-side only and are not trusted.
+    if (session?.admin) {
+      setSession(null);
+      localStorage.removeItem(SESSION_KEY);
+      return;
+    }
     if (session) writeJSON(SESSION_KEY, session);
     else localStorage.removeItem(SESSION_KEY);
   }, [session]);
@@ -186,6 +197,23 @@ function App() {
     (sum, expense) => sum + (Number(expense.amount) || 0),
     0
   );
+
+  const monthlyChartData = Array.from({ length: 6 }, (_, index) => {
+    const date = new Date();
+    date.setDate(1);
+    date.setMonth(date.getMonth() - (5 - index));
+    const key = date.toISOString().slice(0, 7);
+    const amount = expenses
+      .filter((item) => String(item.date || "").slice(0, 7) === key)
+      .reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
+    return { key, label: date.toLocaleDateString("en-IN", { month: "short" }), amount };
+  });
+  const selectedMonthTotal = monthlyChartData.find((item) => item.key === selectedChartMonth)?.amount || 0;
+  const categoryChartData = Object.entries(expenses.reduce((acc, item) => {
+    const category = item.category || "Other";
+    acc[category] = (acc[category] || 0) + (Number(item.amount) || 0);
+    return acc;
+  }, {})).sort((a, b) => b[1] - a[1]);
 
   const balances = useMemo(() => {
     const net = {};
@@ -312,6 +340,10 @@ function App() {
 
     const cleanName = groupName.trim();
     if (!cleanName) return;
+    if (groupMemberList.length === 0) {
+      notify("Add at least one group member. Your own name will not be added automatically.");
+      return;
+    }
 
     if (groups.some((group) => group.name.toLowerCase() === cleanName.toLowerCase())) {
       notify("A group with this name already exists.");
@@ -320,7 +352,7 @@ function App() {
 
     const members = [
       ...new Map(
-        [session.name, ...groupMemberList]
+        groupMemberList
           .map((name) => name.trim())
           .filter(Boolean)
           .map((name) => [name.toLowerCase(), name])
@@ -876,15 +908,6 @@ function App() {
             >
               {authMode === "login" ? "Create an account" : "Log in"}
             </button>
-            <button
-              className="link-btn"
-              onClick={() => {
-                setSession({ admin: true });
-                setPage("Admin");
-              }}
-            >
-              Admin access (demo)
-            </button>
           </div>
         </section>
 
@@ -1047,7 +1070,7 @@ function App() {
                           if (event.key === "Enter") {
                             event.preventDefault();
                             const cleanName = groupMemberInput.trim();
-                            if (cleanName && ![session.name, ...groupMemberList].some(
+                            if (cleanName && !groupMemberList.some(
                               (name) => name.toLowerCase() === cleanName.toLowerCase()
                             )) {
                               setGroupMemberList((previous) => [...previous, cleanName]);
@@ -1066,7 +1089,7 @@ function App() {
                             notify("Enter a member name first.");
                             return;
                           }
-                          if ([session.name, ...groupMemberList].some(
+                          if (groupMemberList.some(
                             (name) => name.toLowerCase() === cleanName.toLowerCase()
                           )) {
                             notify("That member is already in the group.");
@@ -1081,7 +1104,6 @@ function App() {
                       </button>
                     </div>
                     <div className="member-chips member-entry-chips">
-                      <span className="member-chip-you">{session.name} (You)</span>
                       {groupMemberList.map((member) => (
                         <span className="member-chip-edit" key={member}>
                           {member}
@@ -1095,7 +1117,7 @@ function App() {
                         </span>
                       ))}
                     </div>
-                    <span className="hint">Add each member separately using the + Add button.</span>
+                    <span className="hint">Only add the people you want in this group. Your account name is not added automatically.</span>
                   </div>
                   <button className="btn btn-primary" type="submit">Create group</button>
                 </form>
@@ -1542,26 +1564,41 @@ function App() {
               </div>
 
               <div className="panel">
-                <h3>Spending by category</h3>
-                {Object.entries(
-                  expenses.reduce((accumulator, item) => {
-                    accumulator[item.category] = (accumulator[item.category] || 0) + Number(item.amount || 0);
-                    return accumulator;
-                  }, {})
-                )
-                  .sort((a, b) => b[1] - a[1])
-                  .map(([category, amount]) => (
-                    <div className="category-row" key={category}>
-                      <div className="list-row">
-                        <strong className="grow">{category}</strong>
-                        <strong>{money(amount)}</strong>
-                      </div>
-                      <div className="progress">
-                        <span style={{ width: `${totalSpent ? (amount / totalSpent) * 100 : 0}%` }} />
-                      </div>
-                    </div>
-                  ))}
-                {expenses.length === 0 && <Empty text="Add expenses to generate analytics." />}
+                <div className="panel-title">
+                  <div><h3>Monthly spending trend</h3><p className="hint">Select a month to inspect its spending total.</p></div>
+                  <span className="pill">Last 6 months</span>
+                </div>
+                <div className="interactive-chart" role="group" aria-label="Monthly spending chart">
+                  {monthlyChartData.map((item) => {
+                    const max = Math.max(1, ...monthlyChartData.map((entry) => entry.amount));
+                    const height = item.amount ? Math.max(5, item.amount / max * 100) : 3;
+                    return (
+                      <button type="button" className={`chart-column ${selectedChartMonth === item.key ? "selected" : ""}`} key={item.key} onClick={() => setSelectedChartMonth(item.key)} title={`${item.label}: ${money(item.amount)}`} aria-pressed={selectedChartMonth === item.key}>
+                        <span className="chart-value">{item.amount ? money(item.amount) : "₹0"}</span>
+                        <span className="chart-track"><span className="chart-bar" style={{ height: `${height}%` }} /></span>
+                        <span className="chart-label">{item.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="chart-selection-summary"><span>{new Date(`${selectedChartMonth}-01T00:00:00`).toLocaleDateString("en-IN", { month: "long", year: "numeric" })}</span><strong>{money(selectedMonthTotal)}</strong></div>
+              </div>
+
+              <div className="panel">
+                <div className="panel-title"><div><h3>Spending by category</h3><p className="hint">Select a category to filter the expense list.</p></div><button type="button" className="btn btn-outline" onClick={() => { setSelectedChartCategory("all"); setFilterCategory("all"); setPage("Expenses"); }}>View all expenses</button></div>
+                {categoryChartData.length ? (
+                  <div className="interactive-category-chart">
+                    {categoryChartData.map(([category, amount]) => {
+                      const percentage = totalSpent ? amount / totalSpent * 100 : 0;
+                      return (
+                        <button type="button" className={`category-chart-row ${selectedChartCategory === category ? "selected" : ""}`} key={category} onClick={() => { setSelectedChartCategory(category); setFilterCategory(category); setPage("Expenses"); }} title={`Filter expenses: ${category}`}>
+                          <span className="category-chart-heading"><strong>{category}</strong><span>{money(amount)} · {percentage.toFixed(1)}%</span></span>
+                          <span className="category-chart-track"><span style={{ width: `${percentage}%` }} /></span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : <Empty text="Add expenses to generate interactive category analytics." />}
               </div>
             </>
           )}
