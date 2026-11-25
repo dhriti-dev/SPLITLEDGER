@@ -108,8 +108,12 @@ function App() {
   const [editingExpenseId, setEditingExpenseId] = useState(null);
   const [editTitle, setEditTitle] = useState("");
   const [editCategory, setEditCategory] = useState("Food");
-  const [settlePerson, setSettlePerson] = useState("");
-  const [settleDirection, setSettleDirection] = useState("paid");
+  // Settlement records are created between actual group members.
+  // The signed-in account is only the recorder and need not be a group member.
+  const [settleGroupId, setSettleGroupId] = useState("");
+  const [settleMode, setSettleMode] = useState("suggested");
+  const [settlePayer, setSettlePayer] = useState("");
+  const [settleReceiver, setSettleReceiver] = useState("");
   const [settleAmount, setSettleAmount] = useState("");
   const [settlePaymentMode, setSettlePaymentMode] = useState("UPI");
   const [settlePaymentDate, setSettlePaymentDate] = useState(
@@ -309,22 +313,95 @@ function App() {
     });
   }, [expenses, filterGroup, filterCategory, searchText]);
 
-  const myCurrentBalance = Number(balances[session?.name] || 0);
-  const selectedOtherBalance = Number(balances[settlePerson] || 0);
-  const settlementLimit = settleDirection === "paid"
-    ? Math.min(Math.max(0, -myCurrentBalance), Math.max(0, selectedOtherBalance))
-    : Math.min(Math.max(0, myCurrentBalance), Math.max(0, -selectedOtherBalance));
-  const settlementPeople = people.filter((person) => {
-    if (person === session?.name) return false;
-    const balance = Number(balances[person] || 0);
-    return settleDirection === "paid"
-      ? balance > 0 && myCurrentBalance < 0
-      : balance < 0 && myCurrentBalance > 0;
-  });
+  const activeSettlementGroup =
+    groups.find((group) => group.id === settleGroupId) || groups[0] || null;
+
+  const settlementGroupData = useMemo(() => {
+    if (!activeSettlementGroup) {
+      return { members: [], balances: {}, suggestions: [], totalReceivable: 0, totalPayable: 0 };
+    }
+
+    const members = [...new Set((activeSettlementGroup.members || []).filter(Boolean))];
+    const memberBalances = Object.fromEntries(members.map((member) => [member, 0]));
+    const groupExpenses = expenses.filter((expense) => expense.groupId === activeSettlementGroup.id);
+
+    groupExpenses.forEach((expense) => {
+      (expense.shares || []).forEach((share) => {
+        if (share.person && Object.hasOwn(memberBalances, share.person)) {
+          memberBalances[share.person] -= Number(share.amount) || 0;
+        }
+      });
+
+      const payments = Array.isArray(expense.payments) && expense.payments.length
+        ? expense.payments
+        : (expense.paidBy ? [{ person: expense.paidBy, amount: expense.amount }] : []);
+
+      payments.forEach((payment) => {
+        if (payment.person && Object.hasOwn(memberBalances, payment.person)) {
+          memberBalances[payment.person] += Number(payment.amount) || 0;
+        }
+      });
+    });
+
+    // New settlements are scoped to a group. Legacy unscoped settlements remain
+    // in the workspace-wide balance view but are not guessed into a group.
+    settlements
+      .filter((item) => item.groupId === activeSettlementGroup.id)
+      .forEach((item) => {
+        const amount = Number(item.amount) || 0;
+        if (Object.hasOwn(memberBalances, item.from)) memberBalances[item.from] += amount;
+        if (Object.hasOwn(memberBalances, item.to)) memberBalances[item.to] -= amount;
+      });
+
+    const debtors = members
+      .filter((member) => memberBalances[member] < -0.005)
+      .map((member) => ({ person: member, remaining: Math.round(-memberBalances[member] * 100) / 100 }));
+    const creditors = members
+      .filter((member) => memberBalances[member] > 0.005)
+      .map((member) => ({ person: member, remaining: Math.round(memberBalances[member] * 100) / 100 }));
+
+    const suggestions = [];
+    let debtorIndex = 0;
+    let creditorIndex = 0;
+    while (debtorIndex < debtors.length && creditorIndex < creditors.length) {
+      const debtor = debtors[debtorIndex];
+      const creditor = creditors[creditorIndex];
+      const amount = Math.round(Math.min(debtor.remaining, creditor.remaining) * 100) / 100;
+
+      if (amount > 0) {
+        suggestions.push({
+          id: `${debtor.person}::${creditor.person}`,
+          payer: debtor.person,
+          receiver: creditor.person,
+          amount,
+        });
+      }
+
+      debtor.remaining = Math.round((debtor.remaining - amount) * 100) / 100;
+      creditor.remaining = Math.round((creditor.remaining - amount) * 100) / 100;
+      if (debtor.remaining <= 0.005) debtorIndex += 1;
+      if (creditor.remaining <= 0.005) creditorIndex += 1;
+    }
+
+    const totalReceivable = members.reduce(
+      (sum, member) => sum + Math.max(0, memberBalances[member]), 0
+    );
+    const totalPayable = members.reduce(
+      (sum, member) => sum + Math.max(0, -memberBalances[member]), 0
+    );
+
+    return { members, balances: memberBalances, suggestions, totalReceivable, totalPayable };
+  }, [activeSettlementGroup, expenses, settlements]);
+
+  const selectedSettlementLimit = Math.min(
+    Math.max(0, -(settlementGroupData.balances[settlePayer] || 0)),
+    Math.max(0, settlementGroupData.balances[settleReceiver] || 0)
+  );
+
   const dueOutstandingForSelected = duePerson
     ? (dueDirection === "theyOweMe"
-      ? Math.min(Math.max(0, myCurrentBalance), Math.max(0, -(balances[duePerson] || 0)))
-      : Math.min(Math.max(0, -myCurrentBalance), Math.max(0, balances[duePerson] || 0)))
+      ? Math.min(Math.max(0, myBalance), Math.max(0, -(balances[duePerson] || 0)))
+      : Math.min(Math.max(0, -myBalance), Math.max(0, balances[duePerson] || 0)))
     : 0;
 
   const categories = [
@@ -449,6 +526,8 @@ function App() {
 
     setGroups((previous) => previous.filter((item) => item.id !== group.id));
     setExpenses((previous) => previous.filter((item) => item.groupId !== group.id));
+    setSettlements((previous) => previous.filter((item) => item.groupId !== group.id));
+    if (settleGroupId === group.id) setSettleGroupId("");
     if (expenseGroup === group.id) setExpenseGroup("");
     notify(`"${group.name}" deleted.`);
   }
@@ -776,13 +855,25 @@ function App() {
   }
 
   function openDueForSettlement(due) {
-    const direction = due.direction === "iOweThem" ? "paid" : "received";
-    setSettleDirection(direction);
-    setSettlePerson(due.person);
+    const matchingGroup = groups.find((group) =>
+      (group.members || []).includes(session.name) &&
+      (group.members || []).includes(due.person)
+    );
+    if (!matchingGroup) {
+      notify("This personal due date cannot be linked to a group containing both participants. Use the group settlement page to record a group payment.");
+      return;
+    }
+
+    const payer = due.direction === "iOweThem" ? session.name : due.person;
+    const receiver = due.direction === "iOweThem" ? due.person : session.name;
+    setSettleGroupId(matchingGroup.id);
+    setSettleMode("manual");
+    setSettlePayer(payer);
+    setSettleReceiver(receiver);
     setSettleAmount(String(due.amount));
     setSettleNote(due.note || "Payment due settlement");
     setPage("Settle Up");
-    notify("Review the payment details and record the settlement.");
+    notify("Review the group, payer and receiver before recording the settlement.");
   }
 
   function startEditExpense(expense) {
@@ -865,73 +956,100 @@ function App() {
   function addSettlement(event) {
     event.preventDefault();
 
-    const amount = Number(settleAmount);
-    if (!settlePerson || !Number.isFinite(amount) || amount <= 0) {
-      notify("Select a person and enter a valid amount.");
+    const group = activeSettlementGroup;
+    const amount = Math.round(Number(settleAmount) * 100) / 100;
+
+    if (!group) {
+      notify("Create a group before recording a group settlement.");
       return;
     }
-
+    if (!settlePayer || !settleReceiver || settlePayer === settleReceiver) {
+      notify("Choose two different group members: a payer and a receiver.");
+      return;
+    }
+    if (
+      !settlementGroupData.members.includes(settlePayer) ||
+      !settlementGroupData.members.includes(settleReceiver)
+    ) {
+      notify("Both payer and receiver must belong to the selected group.");
+      return;
+    }
+    if (!Number.isFinite(amount) || amount <= 0) {
+      notify("Enter a valid payment amount greater than zero.");
+      return;
+    }
     if (!settlePaymentDate) {
       notify("Please select the payment date.");
       return;
     }
 
-    const myCredit = Math.max(0, balances[session.name] || 0);
-    const myDebt = Math.max(0, -(balances[session.name] || 0));
-    const otherCredit = Math.max(0, balances[settlePerson] || 0);
-    const otherDebt = Math.max(0, -(balances[settlePerson] || 0));
-    const maxSettleable = settleDirection === "paid"
-      ? Math.min(myDebt, otherCredit)
-      : Math.min(myCredit, otherDebt);
-    if (maxSettleable <= 0) {
-      notify(settleDirection === "paid"
-        ? `You do not currently owe ${settlePerson} money.`
-        : `${settlePerson} does not currently owe you money.`);
+    const maxSettleable = Math.min(
+      Math.max(0, -(settlementGroupData.balances[settlePayer] || 0)),
+      Math.max(0, settlementGroupData.balances[settleReceiver] || 0)
+    );
+
+    if (maxSettleable <= 0.005) {
+      notify(`${settlePayer} does not currently owe ${settleReceiver} in this group.`);
       return;
     }
     if (Math.round(amount * 100) > Math.round(maxSettleable * 100)) {
-      notify(`This payment exceeds the outstanding balance of ${money(maxSettleable)}.`);
+      notify(`This payment exceeds the settleable amount of ${money(maxSettleable)}.`);
       return;
     }
 
+    const recordedAt = new Date().toISOString();
     setSettlements((previous) => [
       {
         id: makeId(),
-        from: settleDirection === "paid" ? session.name : settlePerson,
-        to: settleDirection === "paid" ? settlePerson : session.name,
+        from: settlePayer,
+        to: settleReceiver,
         amount,
+        groupId: group.id,
+        groupName: group.name,
+        recordedBy: session.name,
         paymentMode: settlePaymentMode,
         paymentDate: settlePaymentDate,
         reference: settleReference.trim(),
         note: settleNote.trim(),
-        direction: settleDirection,
-        date: new Date().toISOString(),
+        date: recordedAt,
       },
       ...previous,
     ]);
 
-    setPaymentDues((previous) => {
-      let paymentLeft = amount;
-      const matchingDirection = settleDirection === "paid" ? "iOweThem" : "theyOweMe";
-      return previous.map((due) => {
-        if (paymentLeft <= 0 || due.person !== settlePerson || (due.direction || "theyOweMe") !== matchingDirection || due.done) return due;
-        const applied = Math.min(Number(due.amount) || 0, paymentLeft);
-        paymentLeft = Math.max(0, Math.round((paymentLeft - applied) * 100) / 100);
-        const remaining = Math.max(0, Math.round(((Number(due.amount) || 0) - applied) * 100) / 100);
-        return remaining <= 0.005
-          ? { ...due, amount: 0, done: true, paidAt: new Date().toISOString() }
-          : { ...due, amount: remaining };
-      });
-    });
+    // Update an existing personal due date only when the logged-in account
+    // is one of the two participants. A recorder is not automatically a payer.
+    if (settlePayer === session.name || settleReceiver === session.name) {
+      setPaymentDues((previous) => {
+        let paymentLeft = amount;
+        const matchingDirection = settlePayer === session.name ? "iOweThem" : "theyOweMe";
+        const otherPerson = settlePayer === session.name ? settleReceiver : settlePayer;
+        return previous.map((due) => {
+          if (
+            paymentLeft <= 0 ||
+            due.person !== otherPerson ||
+            (due.direction || "theyOweMe") !== matchingDirection ||
+            due.done
+          ) return due;
 
-    setSettlePerson("");
+          const applied = Math.min(Number(due.amount) || 0, paymentLeft);
+          paymentLeft = Math.max(0, Math.round((paymentLeft - applied) * 100) / 100);
+          const remaining = Math.max(0, Math.round(((Number(due.amount) || 0) - applied) * 100) / 100);
+          return remaining <= 0.005
+            ? { ...due, amount: 0, done: true, paidAt: recordedAt }
+            : { ...due, amount: remaining };
+        });
+      });
+    }
+
+    setSettlePayer("");
+    setSettleReceiver("");
     setSettleAmount("");
-    setSettleDirection("paid");
     setSettlePaymentMode("UPI");
     setSettlePaymentDate(new Date().toLocaleDateString("en-CA"));
     setSettleReference("");
     setSettleNote("");
-    notify("Payment recorded successfully.");
+    setSettleMode("suggested");
+    notify(`Payment of ${money(amount)} recorded: ${settlePayer} → ${settleReceiver}.`);
     setPage("Settlement History");
   }
 
@@ -1001,6 +1119,7 @@ function App() {
         ...item,
         from: item.from === oldName ? newName : item.from,
         to: item.to === oldName ? newName : item.to,
+        recordedBy: item.recordedBy === oldName ? newName : item.recordedBy,
       }))
     );
 
@@ -1732,82 +1851,279 @@ function App() {
           {page === "Settle Up" && (
             <>
               <div className="page-intro">
-                <span className="eyebrow">PAYMENTS</span>
+                <span className="eyebrow">GROUP PAYMENTS</span>
                 <h1>Settle up</h1>
-                <p className="muted">Record money you paid to a member or received from them.</p>
+                <p className="muted">
+                  Record payments between any two members. You can use smart suggestions or enter a settlement manually.
+                </p>
               </div>
 
-              <div className="panel narrow-panel">
-                <form className="form-stack" onSubmit={addSettlement}>
-                  <div className="field-label">What happened?</div>
-                  <div className="payment-direction-grid">
-                    <button type="button" className={`payment-direction-card ${settleDirection === "paid" ? "active" : ""}`} onClick={() => { setSettleDirection("paid"); setSettlePerson(""); setSettleAmount(""); }}>
-                      <span className="payment-direction-icon">↗</span>
-                      <strong>I paid someone</strong>
-                      <small>You sent money to settle what you owed.</small>
-                    </button>
-                    <button type="button" className={`payment-direction-card ${settleDirection === "received" ? "active" : ""}`} onClick={() => { setSettleDirection("received"); setSettlePerson(""); setSettleAmount(""); }}>
-                      <span className="payment-direction-icon">↙</span>
-                      <strong>I received money</strong>
-                      <small>Someone paid you back.</small>
-                    </button>
+              <div className="settlement-overview-grid">
+                <div className="settlement-overview-card receivable">
+                  <span>Total receivable</span>
+                  <strong>{money(settlementGroupData.totalReceivable)}</strong>
+                  <small>Outstanding credits in this group</small>
+                </div>
+                <div className="settlement-overview-card payable">
+                  <span>Total payable</span>
+                  <strong>{money(settlementGroupData.totalPayable)}</strong>
+                  <small>Outstanding debts in this group</small>
+                </div>
+              </div>
+
+              <div className="panel settlement-workspace">
+                <div className="settlement-panel-heading">
+                  <div>
+                    <h3>Choose a group</h3>
+                    <p className="hint">Settlements are calculated independently for each group.</p>
                   </div>
-                  <label className="field-label">
-                    {settleDirection === "paid" ? "Who did you pay?" : "Who paid you?"}
-                    <select value={settlePerson} onChange={(event) => { setSettlePerson(event.target.value); setSettleAmount(""); }} required>
-                      <option value="">Choose a person with an outstanding balance</option>
-                      {settlementPeople.map((person) => (
-                        <option key={person} value={person}>{person} · {money(Math.abs(Number(balances[person] || 0)))}</option>
-                      ))}
-                    </select>
-                  </label>
-                  {settlePerson ? (
-                    <div className="settlement-balance-callout">
-                      <span>{settleDirection === "paid" ? `You owe ${settlePerson}` : `${settlePerson} owes you`}</span>
-                      <strong>{money(settlementLimit)}</strong>
-                      <button type="button" className="text-button" onClick={() => setSettleAmount(settlementLimit.toFixed(2))}>Use full outstanding amount</button>
+                  <span className="settlement-recorder">Recorded by {session.name}</span>
+                </div>
+
+                <label className="field-label">
+                  Group
+                  <select
+                    value={activeSettlementGroup?.id || ""}
+                    onChange={(event) => {
+                      setSettleGroupId(event.target.value);
+                      setSettlePayer("");
+                      setSettleReceiver("");
+                      setSettleAmount("");
+                    }}
+                    required
+                  >
+                    <option value="">Select a group</option>
+                    {groups.map((group) => (
+                      <option key={group.id} value={group.id}>{group.name}</option>
+                    ))}
+                  </select>
+                </label>
+
+                {!activeSettlementGroup ? (
+                  <div className="settlement-empty">
+                    <div className="empty-icon">₹</div>
+                    <strong>No group available yet</strong>
+                    <p>Create a group and add its members before recording settlements.</p>
+                    <button type="button" className="btn btn-primary" onClick={() => setPage("Groups")}>Go to groups</button>
+                  </div>
+                ) : (
+                  <>
+                    <div className="settlement-mode-switch">
+                      <button
+                        type="button"
+                        className={settleMode === "suggested" ? "active" : ""}
+                        onClick={() => {
+                          setSettleMode("suggested");
+                          setSettlePayer("");
+                          setSettleReceiver("");
+                          setSettleAmount("");
+                        }}
+                      >
+                        <span>✦</span>
+                        <strong>Smart suggestions</strong>
+                        <small>Automatically match who owes whom</small>
+                      </button>
+                      <button
+                        type="button"
+                        className={settleMode === "manual" ? "active" : ""}
+                        onClick={() => {
+                          setSettleMode("manual");
+                          setSettlePayer("");
+                          setSettleReceiver("");
+                          setSettleAmount("");
+                        }}
+                      >
+                        <span>↔</span>
+                        <strong>Manual settlement</strong>
+                        <small>Choose the payer and receiver yourself</small>
+                      </button>
                     </div>
-                  ) : (
-                    <p className="hint">{settlementPeople.length ? "Choose a person to see the exact amount available to settle." : "No matching outstanding balances for this direction. Check the Balances page first."}</p>
-                  )}
-                  <label className="field-label">
-                    Amount (₹)
-                    <input type="number" min="0.01" max={settlementLimit || undefined} step="0.01" value={settleAmount} onChange={(event) => setSettleAmount(event.target.value)} placeholder="Enter amount to settle" required disabled={!settlePerson || settlementLimit <= 0} />
-                  </label>
-                  <div className="form-grid">
-                    <label className="field-label">
-                      Payment mode
-                      <select value={settlePaymentMode} onChange={(event) => setSettlePaymentMode(event.target.value)}>
-                        <option>UPI</option>
-                        <option>Cash</option>
-                        <option>Bank transfer</option>
-                        <option>Debit card</option>
-                        <option>Credit card</option>
-                        <option>Other</option>
-                      </select>
-                    </label>
-                    <label className="field-label">
-                      Payment date
-                      <input
-                        type="date"
-                        value={settlePaymentDate}
-                        max={new Date().toLocaleDateString("en-CA")}
-                        onChange={(event) => setSettlePaymentDate(event.target.value)}
-                        required
-                      />
-                    </label>
-                  </div>
-                  <label className="field-label">
-                    Transaction reference (optional)
-                    <input value={settleReference} onChange={(event) => setSettleReference(event.target.value)} placeholder="UPI ID / transaction reference" />
-                  </label>
-                  <label className="field-label">
-                    Note (optional)
-                    <input value={settleNote} onChange={(event) => setSettleNote(event.target.value)} placeholder="Add a short payment note" />
-                  </label>
-                  <p className="hint">You can record a partial payment or settle the full outstanding amount. This records a payment only; it does not transfer money through UPI or a bank.</p>
-                  <button className="btn btn-primary" type="submit">Record payment</button>
-                </form>
+
+                    {settleMode === "suggested" ? (
+                      <div className="settlement-suggestions">
+                        <div className="settlement-section-title">
+                          <div>
+                            <h3>Suggested payments</h3>
+                            <p className="hint">Select a suggested payment to prefill the settlement form.</p>
+                          </div>
+                          <span className="settlement-count">{settlementGroupData.suggestions.length} pending</span>
+                        </div>
+
+                        {settlementGroupData.suggestions.length ? (
+                          <div className="suggestion-list">
+                            {settlementGroupData.suggestions.map((suggestion) => {
+                              const selected = settlePayer === suggestion.payer && settleReceiver === suggestion.receiver;
+                              return (
+                                <button
+                                  type="button"
+                                  key={suggestion.id}
+                                  className={`suggestion-card ${selected ? "selected" : ""}`}
+                                  onClick={() => {
+                                    setSettlePayer(suggestion.payer);
+                                    setSettleReceiver(suggestion.receiver);
+                                    setSettleAmount(suggestion.amount.toFixed(2));
+                                  }}
+                                >
+                                  <span className="suggestion-avatar">{suggestion.payer.slice(0, 1).toUpperCase()}</span>
+                                  <span className="suggestion-main">
+                                    <strong>{suggestion.payer} <span>pays</span> {suggestion.receiver}</strong>
+                                    <small>{suggestion.payer} owes {suggestion.receiver}</small>
+                                  </span>
+                                  <strong className="suggestion-amount">{money(suggestion.amount)}</strong>
+                                  <span className="suggestion-arrow">›</span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <div className="settlement-empty compact">
+                            <div className="empty-icon">✓</div>
+                            <strong>Everyone is settled!</strong>
+                            <p>There are no outstanding member-to-member payments in this group.</p>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="manual-settlement-box">
+                        <div className="settlement-section-title">
+                          <div>
+                            <h3>Enter payment details</h3>
+                            <p className="hint">Choose any debtor and creditor in this group.</p>
+                          </div>
+                          <span className="manual-tag">MANUAL</span>
+                        </div>
+                        <div className="form-grid">
+                          <label className="field-label">
+                            Who is paying?
+                            <select
+                              value={settlePayer}
+                              onChange={(event) => {
+                                setSettlePayer(event.target.value);
+                                setSettleAmount("");
+                              }}
+                              required
+                            >
+                              <option value="">Select payer</option>
+                              {settlementGroupData.members
+                                .filter((member) => (settlementGroupData.balances[member] || 0) < -0.005)
+                                .map((member) => (
+                                  <option key={member} value={member}>
+                                    {member} · owes {money(Math.abs(settlementGroupData.balances[member]))}
+                                  </option>
+                                ))}
+                            </select>
+                          </label>
+                          <label className="field-label">
+                            Who is receiving?
+                            <select
+                              value={settleReceiver}
+                              onChange={(event) => {
+                                setSettleReceiver(event.target.value);
+                                setSettleAmount("");
+                              }}
+                              required
+                            >
+                              <option value="">Select receiver</option>
+                              {settlementGroupData.members
+                                .filter((member) => member !== settlePayer && (settlementGroupData.balances[member] || 0) > 0.005)
+                                .map((member) => (
+                                  <option key={member} value={member}>
+                                    {member} · owed {money(settlementGroupData.balances[member])}
+                                  </option>
+                                ))}
+                            </select>
+                          </label>
+                        </div>
+                        {settlePayer && settleReceiver && (
+                          <div className="settlement-balance-callout">
+                            <span>{settlePayer} can pay {settleReceiver} up to</span>
+                            <strong>{money(selectedSettlementLimit)}</strong>
+                            <button
+                              type="button"
+                              className="text-button"
+                              onClick={() => setSettleAmount(selectedSettlementLimit.toFixed(2))}
+                            >
+                              Use maximum amount
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {settlePayer && settleReceiver && (
+                      <form className="settlement-confirm-form" onSubmit={addSettlement}>
+                        <div className="settlement-flow-preview">
+                          <div>
+                            <span>FROM · PAYER</span>
+                            <strong>{settlePayer}</strong>
+                          </div>
+                          <span className="settlement-flow-arrow">→</span>
+                          <div>
+                            <span>TO · RECEIVER</span>
+                            <strong>{settleReceiver}</strong>
+                          </div>
+                        </div>
+
+                        <label className="field-label">
+                          Payment amount (₹)
+                          <input
+                            type="number"
+                            min="0.01"
+                            max={selectedSettlementLimit || undefined}
+                            step="0.01"
+                            value={settleAmount}
+                            onChange={(event) => setSettleAmount(event.target.value)}
+                            placeholder="Enter amount"
+                            required
+                          />
+                        </label>
+
+                        <div className="form-grid">
+                          <label className="field-label">
+                            Payment mode
+                            <select value={settlePaymentMode} onChange={(event) => setSettlePaymentMode(event.target.value)}>
+                              <option>UPI</option>
+                              <option>Cash</option>
+                              <option>Bank transfer</option>
+                              <option>Debit card</option>
+                              <option>Credit card</option>
+                              <option>Other</option>
+                            </select>
+                          </label>
+                          <label className="field-label">
+                            Payment date
+                            <input
+                              type="date"
+                              value={settlePaymentDate}
+                              max={new Date().toLocaleDateString("en-CA")}
+                              onChange={(event) => setSettlePaymentDate(event.target.value)}
+                              required
+                            />
+                          </label>
+                        </div>
+
+                        <label className="field-label">
+                          Transaction reference (optional)
+                          <input value={settleReference} onChange={(event) => setSettleReference(event.target.value)} placeholder="UPI ID / transaction reference" />
+                        </label>
+                        <label className="field-label">
+                          Note (optional)
+                          <input value={settleNote} onChange={(event) => setSettleNote(event.target.value)} placeholder="Add a short payment note" />
+                        </label>
+                        <p className="hint settlement-disclaimer">
+                          This records the payment in SplitLedger; it does not transfer money through UPI or a bank. The signed-in user is saved as the recorder, not automatically as the payer.
+                        </p>
+                        <button
+                          className="btn btn-primary settlement-submit"
+                          type="submit"
+                          disabled={!settleAmount || Number(settleAmount) <= 0 || Number(settleAmount) > selectedSettlementLimit + 0.0001}
+                        >
+                          Confirm and record payment
+                        </button>
+                      </form>
+                    )}
+                  </>
+                )}
               </div>
             </>
           )}
@@ -1826,6 +2142,7 @@ function App() {
                         <div className="group-icon">✓</div>
                         <div className="grow">
                           <strong>{item.from} paid {item.to}</strong>
+                          <small>{item.groupName || "Legacy / ungrouped settlement"} · Recorded by {item.recordedBy || "account owner"}</small>
                           <small>
                             {item.paymentMode || "Payment mode not specified"} ·{" "}
                             {item.paymentDate
