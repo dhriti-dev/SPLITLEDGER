@@ -825,3 +825,114 @@ input:focus, select:focus {
 .category-chart-track{height:9px;background:#efedf7;border-radius:20px;overflow:hidden}
 .category-chart-track span{height:100%;display:block;background:linear-gradient(90deg,#8878f4,#5b49d5);border-radius:20px;transition:width .3s ease}
 @media(max-width:520px){.interactive-chart{gap:4px;padding-inline:0}.chart-value{font-size:8px}.chart-track{height:115px;width:28px}.chart-label{font-size:10px}.category-chart-heading{font-size:10px}}
+
+/* Bill-splitting workflow */
+.split-editor,
+.split-preview {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid #e8e5f6;
+  border-radius: 13px;
+  background: linear-gradient(145deg, #fff, #faf9ff);
+}
+.split-editor-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: #302b52;
+  font-size: 12px;
+}
+.split-editor-heading > span {
+  color: #77758f;
+  font-size: 10px;
+  font-weight: 600;
+}
+.participant-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+  gap: 8px;
+}
+.participant-option,
+.toggle-line {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: #4d4968;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.participant-option {
+  padding: 10px 11px;
+  border: 1px solid #e9e6f5;
+  border-radius: 9px;
+  background: #fff;
+}
+.participant-option:has(input:checked) {
+  border-color: #9588f2;
+  background: #f4f1ff;
+  color: #4d3fc0;
+}
+.participant-option input,
+.toggle-line input {
+  width: 15px;
+  height: 15px;
+  min-width: 15px;
+  margin: 0;
+  accent-color: #6755e8;
+}
+.toggle-line {
+  width: fit-content;
+  padding: 3px 0;
+}
+.payer-contribution-row {
+  display: grid;
+  grid-template-columns: minmax(130px, 1fr) minmax(130px, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+}
+.preview-share-row,
+.preview-total {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: #5c5875;
+  font-size: 12px;
+  padding: 7px 0;
+  border-bottom: 1px solid #efedf7;
+}
+.preview-share-row strong,
+.preview-total strong {
+  color: #302568;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+.preview-total {
+  border-bottom: 0;
+  border-top: 1px solid #dedaf1;
+  padding-top: 12px;
+  font-weight: 800;
+}
+.split-preview .hint {
+  margin: 0;
+}
+@media (max-width: 560px) {
+  .payer-contribution-row {
+    grid-template-columns: 1fr 1fr;
+  }
+  .payer-contribution-row .text-danger {
+    grid-column: 1 / -1;
+    justify-self: start;
+  }
+}
+.participant-option input,
+.toggle-line input {
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  box-shadow: none;
+}

@@ -40,6 +40,29 @@ const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => 
 
 const csvCell = (value) => `"${String(value ?? "").replace(/"/g, '""')}"`;
 
+// Allocate integer paise proportionally, assigning rounding remainders
+// deterministically so the resulting shares always equal the expense total.
+const allocateByWeight = (amount, members, weights) => {
+  const totalPaise = Math.round(Number(amount) * 100);
+  const normalized = members.map((person) => Math.max(0, Number(weights[person]) || 0));
+  const totalWeight = normalized.reduce((sum, value) => sum + value, 0);
+  if (!members.length || totalWeight <= 0) return [];
+
+  const parts = members.map((person, index) => {
+    const raw = (totalPaise * normalized[index]) / totalWeight;
+    const base = Math.floor(raw);
+    return { person, paise: base, remainder: raw - base };
+  });
+  let remaining = totalPaise - parts.reduce((sum, part) => sum + part.paise, 0);
+  [...parts].sort((a, b) => b.remainder - a.remainder).forEach((part) => {
+    if (remaining > 0) {
+      part.paise += 1;
+      remaining -= 1;
+    }
+  });
+  return parts.map((part) => ({ person: part.person, amount: part.paise / 100 }));
+};
+
 function App() {
   const [users, setUsers] = useState(() => readJSON(USER_KEY, []));
   const [session, setSession] = useState(() => {
@@ -62,6 +85,11 @@ function App() {
   const [paymentDues, setPaymentDues] = useState([]);
   const [monthlyBudget, setMonthlyBudget] = useState(() => 0);
   const [customShares, setCustomShares] = useState({});
+  const [expenseParticipants, setExpenseParticipants] = useState([]);
+  const [percentageShares, setPercentageShares] = useState({});
+  const [shareWeights, setShareWeights] = useState({});
+  const [multiplePayers, setMultiplePayers] = useState(false);
+  const [additionalPayers, setAdditionalPayers] = useState([]);
   const [receiptData, setReceiptData] = useState("");
   const [dataOwnerPhone, setDataOwnerPhone] = useState("");
 
@@ -81,6 +109,7 @@ function App() {
   const [editTitle, setEditTitle] = useState("");
   const [editCategory, setEditCategory] = useState("Food");
   const [settlePerson, setSettlePerson] = useState("");
+  const [settleDirection, setSettleDirection] = useState("paid");
   const [settleAmount, setSettleAmount] = useState("");
   const [settlePaymentMode, setSettlePaymentMode] = useState("UPI");
   const [settlePaymentDate, setSettlePaymentDate] = useState(
@@ -130,6 +159,8 @@ function App() {
     setMonthlyBudget(Number(readJSON(userKey("monthlyBudget", phone), 0)) || 0);
     setProfileName(session?.name || "");
     setDataOwnerPhone(phone);
+    setExpenseParticipants([session?.name || ""]);
+    setExpensePayer(session?.name || "");
   }, [phone]);
 
   useEffect(() => {
@@ -176,6 +207,9 @@ function App() {
     );
     expenses.forEach((expense) => {
       if (expense.paidBy) all.add(expense.paidBy);
+      (expense.payments || []).forEach((payment) => {
+        if (payment.person) all.add(payment.person);
+      });
       (expense.shares || []).forEach((share) => {
         if (share.person) all.add(share.person);
       });
@@ -220,11 +254,19 @@ function App() {
     people.forEach((person) => (net[person] = 0));
 
     expenses.forEach((expense) => {
-      const shares = expense.shares || [];
-      shares.forEach((share) => {
+      // Debit each participant by their allocated share.
+      (expense.shares || []).forEach((share) => {
         const value = Number(share.amount) || 0;
-        net[share.person] = (net[share.person] || 0) - value;
-        net[expense.paidBy] = (net[expense.paidBy] || 0) + value;
+        if (share.person) net[share.person] = (net[share.person] || 0) - value;
+      });
+
+      // New records support multiple payers. Legacy records retain paidBy.
+      const payments = Array.isArray(expense.payments) && expense.payments.length
+        ? expense.payments
+        : (expense.paidBy ? [{ person: expense.paidBy, amount: expense.amount }] : []);
+      payments.forEach((payment) => {
+        const value = Number(payment.amount) || 0;
+        if (payment.person) net[payment.person] = (net[payment.person] || 0) + value;
       });
     });
 
@@ -434,6 +476,12 @@ function App() {
     setFilterGroup("all");
     setFilterCategory("all");
     setEditingExpenseId(null);
+    setExpenseParticipants([session.name]);
+    setCustomShares({});
+    setPercentageShares({});
+    setShareWeights({});
+    setMultiplePayers(false);
+    setAdditionalPayers([]);
     notify("All workspace data has been cleared.");
   }
 
@@ -442,49 +490,104 @@ function App() {
 
     const amount = Number(expenseAmount);
     if (!expenseTitle.trim() || !Number.isFinite(amount) || amount <= 0) {
-      notify("Enter a description and a valid amount.");
+      notify("Enter a description and a valid amount greater than zero.");
       return;
     }
 
     const group = groups.find((item) => item.id === expenseGroup);
-    const members = group?.members?.length ? group.members : [session.name];
-    const payer = expensePayer || session.name;
+    const groupMembers = group?.members?.length ? group.members : [session.name];
+    const allowedParticipants = [...new Set([...groupMembers, session.name])];
+    const payer = expensePayer || (group?.members?.[0] || session.name);
+    const participants = expenseSplit === "payer"
+      ? [payer]
+      : [...new Set(expenseParticipants.filter((person) => allowedParticipants.includes(person)))];
 
-    let shares;
-    if (expenseSplit === "equal") {
-      const totalPaise = Math.round(amount * 100);
-      const eachPaise = Math.floor(totalPaise / members.length);
-      let remainingPaise = totalPaise - eachPaise * members.length;
-      shares = members.map((person) => {
-        const sharePaise = eachPaise + (remainingPaise > 0 ? 1 : 0);
-        remainingPaise -= remainingPaise > 0 ? 1 : 0;
-        return { person, amount: sharePaise / 100 };
-      });
+    if (!participants.length) {
+      notify("Select at least one participant for this expense.");
+      return;
+    }
+
+    if (multiplePayers && additionalPayers.some((item) => !item.person || !Number.isFinite(Number(item.amount)) || Number(item.amount) <= 0)) {
+      notify("Complete every additional payer and contribution, or remove the empty row.");
+      return;
+    }
+    const extraPayments = multiplePayers ? additionalPayers : [];
+    const extraTotalPaise = extraPayments.reduce(
+      (sum, item) => sum + Math.round(Number(item.amount) * 100), 0
+    );
+    const totalPaise = Math.round(amount * 100);
+    const primaryPaise = totalPaise - extraTotalPaise;
+
+    if (primaryPaise < 0) {
+      notify("Payer contributions cannot exceed the total expense.");
+      return;
+    }
+    const paymentNames = [payer, ...extraPayments.map((item) => item.person)];
+    if (new Set(paymentNames).size !== paymentNames.length) {
+      notify("Each payer can only be added once.");
+      return;
+    }
+    if (extraPayments.some((item) => !Number.isFinite(Number(item.amount)) || Number(item.amount) <= 0)) {
+      notify("Every additional payer must have a contribution greater than zero.");
+      return;
+    }
+
+    const payments = [
+      ...(primaryPaise > 0 ? [{ person: payer, amount: primaryPaise / 100 }] : []),
+      ...extraPayments.map((item) => ({ person: item.person, amount: Math.round(Number(item.amount) * 100) / 100 })),
+    ];
+    if (payments.reduce((sum, item) => sum + Math.round(item.amount * 100), 0) !== totalPaise) {
+      notify("Payer contributions must add up exactly to the expense amount.");
+      return;
+    }
+
+    let shares = [];
+    if (expenseSplit === "payer") {
+      // The payer is solely responsible. Other members receive no debit.
+      shares = [{ person: payer, amount: totalPaise / 100 }];
     } else if (expenseSplit === "custom") {
-      shares = members.map((person) => ({ person, amount: Number(customShares[person]) || 0 }));
-      const allocated = Math.round(shares.reduce((sum, item) => sum + item.amount, 0) * 100);
-      if (allocated !== Math.round(amount * 100)) {
-        notify("Custom shares must add up exactly to the total expense.");
+      shares = participants.map((person) => ({
+        person,
+        amount: Math.round((Number(customShares[person]) || 0) * 100) / 100,
+      }));
+      const allocatedPaise = shares.reduce((sum, item) => sum + Math.round(item.amount * 100), 0);
+      if (shares.some((item) => item.amount < 0) || allocatedPaise !== totalPaise) {
+        notify("Custom shares must be non-negative and add up exactly to the total expense.");
         return;
       }
-      if (shares.some((item) => item.amount < 0)) {
-        notify("Share amounts cannot be negative.");
+    } else if (expenseSplit === "percentage") {
+      const percentages = participants.map((person) => Number(percentageShares[person]) || 0);
+      const percentageTotal = percentages.reduce((sum, value) => sum + value, 0);
+      if (percentages.some((value) => value < 0) || Math.abs(percentageTotal - 100) > 0.01) {
+        notify("Percentage shares must add up to 100%.");
         return;
       }
+      shares = allocateByWeight(amount, participants, percentageShares);
+    } else if (expenseSplit === "weighted") {
+      const weights = participants.map((person) => Number(shareWeights[person]) || 0);
+      if (weights.some((value) => value < 0) || weights.every((value) => value === 0)) {
+        notify("Enter at least one positive share weight.");
+        return;
+      }
+      shares = allocateByWeight(amount, participants, shareWeights);
     } else {
-      shares = members.map((person) => ({ person, amount: person === payer ? amount : 0 }));
+      shares = allocateByWeight(amount, participants, Object.fromEntries(participants.map((person) => [person, 1])));
     }
 
     setExpenses((previous) => [
       {
         id: makeId(),
         title: expenseTitle.trim(),
-        amount,
+        amount: totalPaise / 100,
         category: expenseCategory,
         groupId: expenseGroup || "",
         groupName: group?.name || "Personal",
         paidBy: payer,
+        payments,
+        participants,
+        splitMethod: expenseSplit,
         shares,
+        receipt: receiptData || "",
         date: new Date().toISOString(),
       },
       ...previous,
@@ -495,6 +598,13 @@ function App() {
     setExpenseCategory("Food");
     setExpensePayer("");
     setExpenseSplit("equal");
+    setExpenseParticipants(group?.members ? [...group.members] : [session.name]);
+    setCustomShares({});
+    setPercentageShares({});
+    setShareWeights({});
+    setMultiplePayers(false);
+    setAdditionalPayers([]);
+    setReceiptData("");
     notify("Expense added successfully.");
     setPage("Expenses");
   }
@@ -674,22 +784,42 @@ function App() {
       return;
     }
 
+    const myCredit = Math.max(0, balances[session.name] || 0);
+    const myDebt = Math.max(0, -(balances[session.name] || 0));
+    const otherCredit = Math.max(0, balances[settlePerson] || 0);
+    const otherDebt = Math.max(0, -(balances[settlePerson] || 0));
+    const maxSettleable = settleDirection === "paid"
+      ? Math.min(myDebt, otherCredit)
+      : Math.min(myCredit, otherDebt);
+    if (maxSettleable <= 0) {
+      notify(settleDirection === "paid"
+        ? `You do not currently owe ${settlePerson} money.`
+        : `${settlePerson} does not currently owe you money.`);
+      return;
+    }
+    if (Math.round(amount * 100) > Math.round(maxSettleable * 100)) {
+      notify(`This payment exceeds the outstanding balance of ${money(maxSettleable)}.`);
+      return;
+    }
+
     setSettlements((previous) => [
       {
         id: makeId(),
-        from: session.name,
-        to: settlePerson,
+        from: settleDirection === "paid" ? session.name : settlePerson,
+        to: settleDirection === "paid" ? settlePerson : session.name,
         amount,
         paymentMode: settlePaymentMode,
         paymentDate: settlePaymentDate,
         reference: settleReference.trim(),
         note: settleNote.trim(),
+        direction: settleDirection,
         date: new Date().toISOString(),
       },
       ...previous,
     ]);
 
     setSettleAmount("");
+    setSettleDirection("paid");
     setSettlePaymentMode("UPI");
     setSettlePaymentDate(new Date().toLocaleDateString("en-CA"));
     setSettleReference("");
@@ -935,8 +1065,34 @@ function App() {
 
   const selectedGroup = groups.find((group) => group.id === expenseGroup);
   const payerOptions = selectedGroup?.members?.length
-    ? selectedGroup.members
+    ? [...new Set([...selectedGroup.members, session.name])]
     : [session.name];
+  const participantOptions = selectedGroup?.members?.length
+    ? [...new Set([...selectedGroup.members, session.name])]
+    : [session.name];
+  const defaultPayer = selectedGroup?.members?.includes(session.name)
+    ? session.name
+    : (selectedGroup?.members?.[0] || session.name);
+  const activePayer = expensePayer || defaultPayer;
+  const activeParticipants = expenseSplit === "payer" ? [activePayer] : expenseParticipants;
+  const previewAmount = Number(expenseAmount) || 0;
+  let splitPreview = [];
+  if (previewAmount > 0 && activeParticipants.length) {
+    if (expenseSplit === "payer") {
+      splitPreview = [{ person: activePayer, amount: Math.round(previewAmount * 100) / 100 }];
+    } else if (expenseSplit === "custom") {
+      splitPreview = activeParticipants.map((person) => ({ person, amount: Math.round((Number(customShares[person]) || 0) * 100) / 100 }));
+    } else if (expenseSplit === "percentage") {
+      const totalPercent = activeParticipants.reduce((sum, person) => sum + (Number(percentageShares[person]) || 0), 0);
+      if (Math.abs(totalPercent - 100) <= 0.01) splitPreview = allocateByWeight(previewAmount, activeParticipants, percentageShares);
+    } else if (expenseSplit === "weighted") {
+      splitPreview = allocateByWeight(previewAmount, activeParticipants, shareWeights);
+    } else {
+      splitPreview = allocateByWeight(previewAmount, activeParticipants, Object.fromEntries(activeParticipants.map((person) => [person, 1])));
+    }
+  }
+  const extraPayerTotal = additionalPayers.reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
+  const primaryPayerShare = Math.max(0, Math.round((previewAmount - extraPayerTotal) * 100) / 100);
 
   return (
     <div className="app-shell">
@@ -1186,8 +1342,16 @@ function App() {
                     <select
                       value={expenseGroup}
                       onChange={(event) => {
+                        const nextGroup = groups.find((item) => item.id === event.target.value);
+                        const nextMembers = nextGroup?.members?.length ? nextGroup.members : [session.name];
                         setExpenseGroup(event.target.value);
-                        setExpensePayer("");
+                        setExpensePayer(nextGroup?.members?.includes(session.name) ? session.name : (nextGroup?.members?.[0] || session.name));
+                        setExpenseParticipants([...nextMembers]);
+                        setCustomShares({});
+                        setPercentageShares(Object.fromEntries(nextMembers.map((person) => [person, String(100 / nextMembers.length)])));
+                        setShareWeights(Object.fromEntries(nextMembers.map((person) => [person, "1"])));
+                        setAdditionalPayers([]);
+                        setMultiplePayers(false);
                       }}
                     >
                       <option value="">Personal / no group</option>
@@ -1196,31 +1360,136 @@ function App() {
                   </label>
 
                   <label className="field-label">
-                    Paid by
-                    <select value={expensePayer || session.name} onChange={(event) => setExpensePayer(event.target.value)}>
-                      {payerOptions.map((person) => <option key={person}>{person}</option>)}
+                    Primary payer
+                    <select value={activePayer} onChange={(event) => setExpensePayer(event.target.value)}>
+                      {payerOptions.map((person) => <option key={person} value={person}>{person}{person === session.name ? " (you)" : ""}</option>)}
                     </select>
                   </label>
+
+                  {expenseSplit !== "payer" && <label className="toggle-line">
+                    <input type="checkbox" checked={multiplePayers} onChange={(event) => {
+                      setMultiplePayers(event.target.checked);
+                      if (!event.target.checked) setAdditionalPayers([]);
+                    }} />
+                    <span>More than one person paid this expense</span>
+                  </label>}
+                  {multiplePayers && expenseSplit !== "payer" && (
+                    <div className="split-editor">
+                      <div className="split-editor-heading">
+                        <strong>Additional payer contributions</strong>
+                        <button type="button" className="link-btn" onClick={() => setAdditionalPayers((previous) => [...previous, { person: payerOptions.find((person) => person !== activePayer && !previous.some((item) => item.person === person)) || "", amount: "" }])} disabled={!payerOptions.some((person) => person !== activePayer && !additionalPayers.some((item) => item.person === person))}>+ Add payer</button>
+                      </div>
+                      {additionalPayers.map((item, index) => (
+                        <div className="payer-contribution-row" key={index}>
+                          <select aria-label="Additional payer" value={item.person} onChange={(event) => setAdditionalPayers((previous) => previous.map((row, rowIndex) => rowIndex === index ? { ...row, person: event.target.value } : row))}>
+                            <option value="">Select payer</option>
+                            {payerOptions.filter((person) => person === item.person || (person !== activePayer && !additionalPayers.some((row, rowIndex) => rowIndex !== index && row.person === person))).map((person) => <option key={person} value={person}>{person}</option>)}
+                          </select>
+                          <input aria-label="Contribution amount" type="number" min="0.01" step="0.01" value={item.amount} onChange={(event) => setAdditionalPayers((previous) => previous.map((row, rowIndex) => rowIndex === index ? { ...row, amount: event.target.value } : row))} placeholder="Contribution ₹" />
+                          <button type="button" className="text-danger" onClick={() => setAdditionalPayers((previous) => previous.filter((_, rowIndex) => rowIndex !== index))}>Remove</button>
+                        </div>
+                      ))}
+                      <small className="hint">{activePayer} contributes the remaining {money(primaryPayerShare)}. All payer contributions must equal the total expense.</small>
+                    </div>
+                  )}
 
                   <label className="field-label">
                     Split method
-                    <select value={expenseSplit} onChange={(event) => setExpenseSplit(event.target.value)}>
-                      <option value="equal">Split equally among group members</option>
+                    <select value={expenseSplit} onChange={(event) => {
+                      setExpenseSplit(event.target.value);
+                      if (event.target.value === "payer") {
+                        setMultiplePayers(false);
+                        setAdditionalPayers([]);
+                      }
+                    }}>
+                      <option value="equal">Split equally among participants</option>
                       <option value="payer">Payer bears the full expense</option>
                       <option value="custom">Custom amount per member</option>
+                      <option value="percentage">Percentage split</option>
+                      <option value="weighted">Weighted split (shares)</option>
                     </select>
                   </label>
 
+                  {expenseSplit !== "payer" && (
+                    <div className="split-editor">
+                      <div className="split-editor-heading">
+                        <strong>Who participated?</strong>
+                        <button type="button" className="link-btn" onClick={() => setExpenseParticipants(selectedGroup?.members?.length ? [...selectedGroup.members] : [session.name])}>Select all</button>
+                      </div>
+                      <div className="participant-grid">
+                        {participantOptions.map((person) => (
+                          <label className="participant-option" key={person}>
+                            <input type="checkbox" checked={activeParticipants.includes(person)} onChange={(event) => {
+                              const next = event.target.checked
+                                ? [...activeParticipants, person]
+                                : activeParticipants.filter((item) => item !== person);
+                              setExpenseParticipants(next);
+                              setCustomShares((previous) => ({ ...previous, [person]: previous[person] ?? "" }));
+                              setPercentageShares((previous) => ({ ...previous, ...Object.fromEntries(next.map((member) => [member, String(100 / next.length)])) }));
+                              setShareWeights((previous) => ({ ...previous, [person]: previous[person] ?? "1" }));
+                            }} />
+                            <span>{person}{person === session.name ? " (you)" : ""}</span>
+                          </label>
+                        ))}
+                      </div>
+                      <small className="hint">Only selected participants are charged for this expense. The payer can be different from the participants.</small>
+                    </div>
+                  )}
+
                   {expenseSplit === "custom" && (
-                    <div className="custom-share-box">
-                      <strong>Enter each member's share</strong>
-                      {payerOptions.map((person) => (
+                    <div className="split-editor">
+                      <strong>Enter each participant's share</strong>
+                      {activeParticipants.map((person) => (
                         <label className="field-label" key={person}>
                           {person} (₹)
-                          <input type="number" min="0" step="0.01" value={customShares[person] ?? ""} onChange={(event) => setCustomShares((previous) => ({ ...previous, [person]: event.target.value }))} placeholder="0.00" required />
+                          <input type="number" min="0" step="0.01" value={customShares[person] ?? ""} onChange={(event) => setCustomShares((previous) => ({ ...previous, [person]: event.target.value }))} placeholder="0.00" />
                         </label>
                       ))}
-                      <small className="hint">Total allocated: {money(Object.values(customShares).reduce((sum, value) => sum + (Number(value) || 0), 0))}. Must match the expense amount exactly.</small>
+                      <small className="hint">Allocated: {money(activeParticipants.reduce((sum, person) => sum + (Number(customShares[person]) || 0), 0))}. Must equal {money(previewAmount)}.</small>
+                    </div>
+                  )}
+
+                  {expenseSplit === "percentage" && (
+                    <div className="split-editor">
+                      <strong>Enter each participant's percentage</strong>
+                      {activeParticipants.map((person) => (
+                        <label className="field-label" key={person}>
+                          {person} (%)
+                          <input type="number" min="0" max="100" step="0.01" value={percentageShares[person] ?? ""} onChange={(event) => setPercentageShares((previous) => ({ ...previous, [person]: event.target.value }))} placeholder="0" />
+                        </label>
+                      ))}
+                      <small className="hint">Total percentage: {activeParticipants.reduce((sum, person) => sum + (Number(percentageShares[person]) || 0), 0).toFixed(2)}% (must equal 100%).</small>
+                    </div>
+                  )}
+
+                  {expenseSplit === "weighted" && (
+                    <div className="split-editor">
+                      <strong>Enter each participant's share weight</strong>
+                      {activeParticipants.map((person) => (
+                        <label className="field-label" key={person}>
+                          {person} (shares)
+                          <input type="number" min="0" step="0.01" value={shareWeights[person] ?? "1"} onChange={(event) => setShareWeights((previous) => ({ ...previous, [person]: event.target.value }))} placeholder="1" />
+                        </label>
+                      ))}
+                      <small className="hint">Example: weights 2, 1 and 1 allocate 50%, 25% and 25%.</small>
+                    </div>
+                  )}
+
+                  {previewAmount > 0 && (
+                    <div className="split-preview">
+                      <div className="split-editor-heading">
+                        <strong>Live split preview</strong>
+                        <span>{splitPreview.length ? "Ready to review" : "Complete the split"}</span>
+                      </div>
+                      {expenseSplit === "payer" ? (
+                        <p className="hint">{activePayer} is responsible for 100% of this expense. No other member will owe money for it.</p>
+                      ) : splitPreview.map((share) => (
+                        <div className="preview-share-row" key={share.person}>
+                          <span>{share.person}</span>
+                          <strong>{money(share.amount)}</strong>
+                        </div>
+                      ))}
+                      {splitPreview.length > 0 && <div className="preview-total"><span>Total allocated</span><strong>{money(splitPreview.reduce((sum, share) => sum + share.amount, 0))}</strong></div>}
                     </div>
                   )}
 
@@ -1231,8 +1500,7 @@ function App() {
                   </label>
 
                   <p className="hint">
-                    Equal split distributes the amount across the selected group's members.
-                    Choose payer bears the full expense when nobody else shares the cost.
+                    Choose participants and a split method. The selected payer(s) are credited for the amount they actually contributed; participants are charged only their allocated shares.
                   </p>
                   <button className="btn btn-primary" type="submit">Save expense</button>
                 </form>
@@ -1321,7 +1589,7 @@ function App() {
               <div className="page-intro">
                 <span className="eyebrow">SETTLEMENTS</span>
                 <h1>Balances</h1>
-                <p className="muted">A positive balance means you are owed money; a negative balance means you owe money.</p>
+                <p className="muted">Your summary shows your own position. Member balances show each person's net credit or net amount owed across recorded expenses.</p>
               </div>
 
               <div className="stats-grid">
@@ -1340,7 +1608,7 @@ function App() {
                     </div>
                     <strong className={(balances[person] || 0) < 0 ? "negative" : (balances[person] || 0) > 0 ? "positive" : "neutral"}>
                       {money(Math.abs(balances[person] || 0))}{" "}
-                      {(balances[person] || 0) > 0 ? "owes you" : (balances[person] || 0) < 0 ? "you owe" : "settled"}
+                      {(balances[person] || 0) > 0 ? "net credit" : (balances[person] || 0) < 0 ? "net owed" : "settled"}
                     </strong>
                   </div>
                 ))}
@@ -1356,13 +1624,20 @@ function App() {
               <div className="page-intro">
                 <span className="eyebrow">PAYMENTS</span>
                 <h1>Settle up</h1>
-                <p className="muted">Record a payment made to another member.</p>
+                <p className="muted">Record money you paid to a member or received from them.</p>
               </div>
 
               <div className="panel narrow-panel">
                 <form className="form-stack" onSubmit={addSettlement}>
                   <label className="field-label">
-                    Paid to
+                    Payment direction
+                    <select value={settleDirection} onChange={(event) => setSettleDirection(event.target.value)}>
+                      <option value="paid">I paid this person</option>
+                      <option value="received">I received money from this person</option>
+                    </select>
+                  </label>
+                  <label className="field-label">
+                    {settleDirection === "paid" ? "Paid to" : "Received from"}
                     <select value={settlePerson} onChange={(event) => setSettlePerson(event.target.value)} required>
                       <option value="">Select person</option>
                       {people.filter((person) => person !== session.name).map((person) => (
@@ -1405,7 +1680,7 @@ function App() {
                     Note (optional)
                     <input value={settleNote} onChange={(event) => setSettleNote(event.target.value)} placeholder="Add a short payment note" />
                   </label>
-                  <p className="hint">Record the payment method and date for your own settlement history. This does not process an actual payment.</p>
+                  <p className="hint">The amount is checked against the outstanding balance. This records a payment; it does not process an actual bank or UPI transfer.</p>
                   <button className="btn btn-primary" type="submit">Record payment</button>
                 </form>
               </div>
@@ -1417,7 +1692,7 @@ function App() {
               <div className="page-intro">
                 <span className="eyebrow">PAYMENTS</span>
                 <h1>Settlement history</h1>
-                <p className="muted">Payments recorded from your account.</p>
+                <p className="muted">Payments recorded in your workspace.</p>
               </div>
               <div className="panel">
                 {settlements.length
